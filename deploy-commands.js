@@ -105,6 +105,8 @@ const commands = [
   new SlashCommandBuilder().setName('dire').setDescription('Parle en tant que ton personnage').addStringOption(o => o.setName('message').setDescription('Message').setRequired(true)),
   new SlashCommandBuilder().setName('cni').setDescription("Génère une carte d'identité RP")
     .addStringOption(o => o.setName('nom').setDescription('Nom complet').setRequired(true)).addStringOption(o => o.setName('naissance').setDescription('Date de naissance').setRequired(true)).addStringOption(o => o.setName('adresse').setDescription('Adresse').setRequired(true)),
+  new SlashCommandBuilder().setName('carte-identite').setDescription("Consulte une carte d'identité enregistrée")
+    .addUserOption(o => o.setName('membre').setDescription('Membre').setRequired(false)),
 
   // ----- Utilitaires -----
   new SlashCommandBuilder().setName('ping').setDescription('Latence du bot'),

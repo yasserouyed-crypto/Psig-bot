@@ -31,6 +31,7 @@ const LEVELS_PATH = path.join(DATA_DIR, 'levels.json');
 const CHARACTERS_PATH = path.join(DATA_DIR, 'characters.json');
 const CASIERS_PATH = path.join(DATA_DIR, 'casiers.json');
 const ENTREPRISES_PATH = path.join(DATA_DIR, 'entreprises.json');
+const CNI_PATH = path.join(DATA_DIR, 'cni.json');
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 function loadJson(fp, fb) { try { return JSON.parse(fs.readFileSync(fp, 'utf8')); } catch { return fb; } }
@@ -52,6 +53,7 @@ let characters = loadJson(CHARACTERS_PATH, {});
 // casiers[userId] = { history:[{id,type,raison,moderateur,date}], notes:[{id,texte,moderateur,date}] }
 let casiers = loadJson(CASIERS_PATH, {});
 let entreprises = loadJson(ENTREPRISES_PATH, []);
+let cniData = loadJson(CNI_PATH, {}); // { userId: { nom, naissance, adresse, numero, delivree } }
 
 function genId() { return Date.now().toString(36) + Math.floor(Math.random() * 1000).toString(36); }
 function getRecord(userId) {
@@ -90,9 +92,15 @@ async function findExistingTicket(guild, userId) {
   if (!category) return null;
   return guild.channels.cache.find(ch => ch.parentId === config.ticketCategoryId && ch.topic === `ticket-owner:${userId}`);
 }
-const TICKET_CATEGORIES = ['Support technique', 'Signalement', 'Question générale', 'Autre'];
+const TICKET_CATEGORIES = ['Fondation', 'Reports Staff', 'Partenariats', 'Questions', 'Unban', 'Reports Joueurs', 'Entreprises'];
+const SUBJECT_BUTTON_ID = 'ticket_subject';
+const ADD_BUTTON_ID = 'ticket_add';
+const REMOVE_BUTTON_ID = 'ticket_remove';
+const SUBJECT_MODAL_ID = 'ticket_modal_subject';
+const ADD_MODAL_ID = 'ticket_modal_add';
+const REMOVE_MODAL_ID = 'ticket_modal_remove';
 
-async function createTicketChannel(interaction, title, fields) {
+async function createTicketChannel(interaction, title, fields, description) {
   const guild = interaction.guild;
   const staffRole = guild.roles.cache.get(config.staffRoleId);
   const channel = await guild.channels.create({
@@ -104,12 +112,19 @@ async function createTicketChannel(interaction, title, fields) {
       ...(staffRole ? [{ id: staffRole.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory] }] : []),
     ],
   });
-  const embed = new EmbedBuilder().setColor(COLOR).setTitle(title).addFields({ name: 'Demandeur', value: `<@${interaction.user.id}>`, inline: true }, ...fields).setTimestamp();
+  const embed = new EmbedBuilder().setColor(COLOR).setTitle(title)
+    .setDescription(description || `Bonjour <@${interaction.user.id}>, notre équipe d'assistance a été notifiée et va prendre en charge votre demande dans les plus brefs délais.\n\nVous pouvez utiliser les boutons d'action ci-dessous pour administrer ce salon.`)
+    .addFields(...fields).setTimestamp();
   const buttons = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(CLAIM_BUTTON_ID).setLabel('Réclamer').setStyle(ButtonStyle.Primary).setEmoji('🖐️'),
-    new ButtonBuilder().setCustomId(CLOSE_BUTTON_ID).setLabel('Fermer le ticket').setStyle(ButtonStyle.Danger).setEmoji('🔒'),
+    new ButtonBuilder().setCustomId(CLOSE_BUTTON_ID).setLabel('Fermer').setStyle(ButtonStyle.Danger).setEmoji('🔒'),
+    new ButtonBuilder().setCustomId(CLAIM_BUTTON_ID).setLabel('Prendre en charge').setStyle(ButtonStyle.Success).setEmoji('🛡️'),
   );
-  await channel.send({ content: `${staffRole ? `<@&${staffRole.id}> ` : ''}<@${interaction.user.id}>`, embeds: [embed], components: [buttons] });
+  const buttons2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(SUBJECT_BUTTON_ID).setLabel('Sujet').setStyle(ButtonStyle.Secondary).setEmoji('⚙️'),
+    new ButtonBuilder().setCustomId(ADD_BUTTON_ID).setLabel('Ajouter').setStyle(ButtonStyle.Success).setEmoji('👍'),
+    new ButtonBuilder().setCustomId(REMOVE_BUTTON_ID).setLabel('Retirer').setStyle(ButtonStyle.Danger).setEmoji('👎'),
+  );
+  await channel.send({ content: `${staffRole ? `<@&${staffRole.id}> ` : ''}<@${interaction.user.id}>`, embeds: [embed], components: [buttons, buttons2] });
   return channel;
 }
 
@@ -124,6 +139,24 @@ async function logModeration(guild, action, targetUser, moderator, reason) {
     .setTimestamp());
 }
 
+async function askAI(question) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return "L'IA n'est pas encore configurée (clé API manquante).";
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ parts: [{ text: question }] }] }),
+    });
+    const data = await res.json();
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    return text ? text.slice(0, 1900) : "Je n'ai pas pu générer de réponse, réessaie avec une autre question.";
+  } catch (err) {
+    console.error('Erreur IA:', err);
+    return "Une erreur est survenue en contactant l'IA.";
+  }
+}
+
 client.once('ready', () => console.log(`Connecté en tant que ${client.user.tag}`));
 
 client.on('interactionCreate', async (interaction) => {
@@ -134,7 +167,7 @@ client.on('interactionCreate', async (interaction) => {
     if (cmd === 'panel-ticket') {
       if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({ content: "Permission refusée.", ephemeral: true });
       const embed = new EmbedBuilder().setColor(COLOR).setTitle('Support — Ouvrir un ticket').setDescription('Choisis une catégorie. Un salon privé sera créé.');
-      const select = new StringSelectMenuBuilder().setCustomId(PANEL_SELECT_ID).setPlaceholder('Choisis une catégorie').addOptions(TICKET_CATEGORIES.map(c => ({ label: c, value: c })));
+      const select = new StringSelectMenuBuilder().setCustomId(PANEL_SELECT_ID).setPlaceholder('Choisis une catégorie').addOptions(TICKET_CATEGORIES.map(c => ({ label: `Tickets ${c}`, description: "Ouvrir un ticket d'assistance", value: c })));
       await interaction.channel.send({ embeds: [embed], components: [new ActionRowBuilder().addComponents(select)] });
       return interaction.reply({ content: 'Panneau publié.', ephemeral: true });
     }
@@ -154,7 +187,7 @@ client.on('interactionCreate', async (interaction) => {
       await interaction.deferReply({ ephemeral: true });
       const category = decodeURIComponent(interaction.customId.split(':')[1]);
       const details = interaction.fields.getTextInputValue('details');
-      const channel = await createTicketChannel(interaction, `Ticket — ${category}`, [{ name: 'Catégorie', value: category, inline: true }, { name: 'Détails', value: details }]);
+      const channel = await createTicketChannel(interaction, `🎟️ Ticket d'Assistance : ${category}`, [{ name: 'Détails', value: details }]);
       return interaction.editReply({ content: `Ticket créé : <#${channel.id}>` });
     }
     if (interaction.isModalSubmit() && interaction.customId.startsWith('form_modal:')) {
@@ -171,6 +204,48 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.reply({ embeds: [new EmbedBuilder().setColor(COLOR).setDescription(`🖐️ Réclamé par <@${interaction.user.id}>.`)] });
     }
     if (interaction.isButton() && interaction.customId === CLOSE_BUTTON_ID) return closeTicket(interaction);
+
+    // Boutons de gestion du ticket : Sujet / Ajouter / Retirer
+    if (interaction.isButton() && [SUBJECT_BUTTON_ID, ADD_BUTTON_ID, REMOVE_BUTTON_ID].includes(interaction.customId)) {
+      const staffRole = interaction.guild.roles.cache.get(config.staffRoleId);
+      if (staffRole && !interaction.member.roles.cache.has(staffRole.id)) return interaction.reply({ content: "Réservé au staff.", ephemeral: true });
+
+      if (interaction.customId === SUBJECT_BUTTON_ID) {
+        const modal = new ModalBuilder().setCustomId(SUBJECT_MODAL_ID).setTitle('Modifier le sujet du ticket');
+        modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('sujet').setLabel('Nouveau sujet').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(80)));
+        return interaction.showModal(modal);
+      }
+      if (interaction.customId === ADD_BUTTON_ID) {
+        const modal = new ModalBuilder().setCustomId(ADD_MODAL_ID).setTitle('Ajouter un membre au ticket');
+        modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('membre').setLabel('ID ou mention du membre').setStyle(TextInputStyle.Short).setRequired(true)));
+        return interaction.showModal(modal);
+      }
+      if (interaction.customId === REMOVE_BUTTON_ID) {
+        const modal = new ModalBuilder().setCustomId(REMOVE_MODAL_ID).setTitle('Retirer un membre du ticket');
+        modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('membre').setLabel('ID ou mention du membre').setStyle(TextInputStyle.Short).setRequired(true)));
+        return interaction.showModal(modal);
+      }
+    }
+
+    if (interaction.isModalSubmit() && interaction.customId === SUBJECT_MODAL_ID) {
+      const sujet = interaction.fields.getTextInputValue('sujet');
+      await interaction.channel.setName(`ticket-${slugify(sujet)}`).catch(() => {});
+      await interaction.reply({ embeds: [new EmbedBuilder().setColor(COLOR).setDescription(`⚙️ Sujet mis à jour : **${sujet}**`)] });
+      return;
+    }
+    if (interaction.isModalSubmit() && (interaction.customId === ADD_MODAL_ID || interaction.customId === REMOVE_MODAL_ID)) {
+      const raw = interaction.fields.getTextInputValue('membre');
+      const userId = raw.replace(/[<@!>]/g, '').trim();
+      const member = await interaction.guild.members.fetch(userId).catch(() => null);
+      if (!member) return interaction.reply({ content: "Membre introuvable. Vérifie l'ID ou la mention.", ephemeral: true });
+      if (interaction.customId === ADD_MODAL_ID) {
+        await interaction.channel.permissionOverwrites.edit(member.id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true });
+        return interaction.reply({ content: `👍 <@${member.id}> a été ajouté au ticket.` });
+      } else {
+        await interaction.channel.permissionOverwrites.delete(member.id).catch(() => {});
+        return interaction.reply({ content: `👎 <@${member.id}> a été retiré du ticket.` });
+      }
+    }
 
     if (['recrutement', 'staff', 'signalement', 'gang'].includes(cmd)) {
       const cfgs = {
@@ -462,7 +537,28 @@ client.on('interactionCreate', async (interaction) => {
     }
     if (cmd === 'cni') {
       const nom = interaction.options.getString('nom'), naissance = interaction.options.getString('naissance'), adresse = interaction.options.getString('adresse');
-      return interaction.reply({ embeds: [new EmbedBuilder().setColor(COLOR).setTitle("🪪 Carte Nationale d'Identité").setThumbnail(interaction.user.displayAvatarURL()).addFields({ name: 'Nom', value: nom, inline: true }, { name: 'Naissance', value: naissance, inline: true }, { name: 'Adresse', value: adresse })] });
+      const existing = cniData[interaction.user.id];
+      const numero = existing ? existing.numero : `${Math.floor(Math.random() * 90 + 10)}-${genId().toUpperCase()}`;
+      const delivree = existing ? existing.delivree : new Date().toLocaleDateString('fr-FR');
+      cniData[interaction.user.id] = { nom, naissance, adresse, numero, delivree };
+      saveJson(CNI_PATH, cniData);
+      const embed = new EmbedBuilder().setColor(COLOR).setTitle("🪪 Carte Nationale d'Identité").setThumbnail(interaction.user.displayAvatarURL())
+        .addFields(
+          { name: 'Nom', value: nom, inline: true }, { name: 'Naissance', value: naissance, inline: true }, { name: 'N° de carte', value: numero, inline: true },
+          { name: 'Adresse', value: adresse }, { name: 'Délivrée le', value: delivree, inline: true },
+        );
+      return interaction.reply({ embeds: [embed] });
+    }
+    if (cmd === 'carte-identite') {
+      const target = interaction.options.getUser('membre') || interaction.user;
+      const carte = cniData[target.id];
+      if (!carte) return interaction.reply({ content: `<@${target.id}> n'a pas encore de carte d'identité. Utilise /cni pour en créer une.`, ephemeral: true });
+      const embed = new EmbedBuilder().setColor(COLOR).setTitle("🪪 Carte Nationale d'Identité").setThumbnail(target.displayAvatarURL())
+        .addFields(
+          { name: 'Nom', value: carte.nom, inline: true }, { name: 'Naissance', value: carte.naissance, inline: true }, { name: 'N° de carte', value: carte.numero, inline: true },
+          { name: 'Adresse', value: carte.adresse }, { name: 'Délivrée le', value: carte.delivree, inline: true },
+        );
+      return interaction.reply({ embeds: [embed] });
     }
     if (cmd === 'me') { const action = interaction.options.getString('action'); const perso = characters[interaction.user.id]; return interaction.reply({ content: `*${perso ? perso.nom : interaction.user.username} ${action}*` }); }
     if (cmd === 'dire') { const texte = interaction.options.getString('message'); const perso = characters[interaction.user.id]; return interaction.reply({ content: `**${perso ? perso.nom : interaction.user.username} dit :** ${texte}` }); }
@@ -576,6 +672,17 @@ client.on('voiceStateUpdate', async (oldS, newS) => {
 // ---------- AutoMod + Anti-spam + XP ----------
 client.on('messageCreate', async (message) => {
   if (message.author.bot || !message.guild) return;
+
+  // IA : répond quand le bot est mentionné directement
+  if (message.mentions.has(client.user.id) && !message.mentions.everyone) {
+    const question = message.content.replace(/<@!?\d+>/g, '').trim();
+    if (question.length > 0) {
+      await message.channel.sendTyping().catch(() => {});
+      const answer = await askAI(question);
+      await message.reply(answer);
+      return;
+    }
+  }
 
   // Anti-lien d'invitation
   if (settings.automod.antiInvite && INVITE_REGEX.test(message.content) && !message.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
