@@ -92,7 +92,16 @@ async function findExistingTicket(guild, userId) {
   if (!category) return null;
   return guild.channels.cache.find(ch => ch.parentId === config.ticketCategoryId && ch.topic === `ticket-owner:${userId}`);
 }
-const TICKET_CATEGORIES = ['Fondation', 'Reports Staff', 'Partenariats', 'Questions', 'Unban', 'Reports Joueurs', 'Entreprises'];
+const TICKET_CATEGORY_INFO = {
+  'Fondation': { emoji: '👑', desc: '• Décale / Fusion.\n• Propositions.' },
+  'Reports Staff': { emoji: '🚫', desc: "• Pour signaler le comportement abusif d'un Staff." },
+  'Partenariats': { emoji: '🔗', desc: '• Demande de partenariat avec notre serveur.' },
+  'Questions': { emoji: '❓', desc: "• Pose une question générale à l'équipe." },
+  'Unban': { emoji: '🔓', desc: '• Demande de débannissement.' },
+  'Reports Joueurs': { emoji: '🚨', desc: '• Signale un joueur qui enfreint le règlement.' },
+  'Entreprises': { emoji: '🏢', desc: "• Demande liée à la création ou gestion d'une entreprise." },
+};
+const TICKET_CATEGORIES = Object.keys(TICKET_CATEGORY_INFO);
 const SUBJECT_BUTTON_ID = 'ticket_subject';
 const ADD_BUTTON_ID = 'ticket_add';
 const REMOVE_BUTTON_ID = 'ticket_remove';
@@ -167,8 +176,13 @@ client.on('interactionCreate', async (interaction) => {
     // ===== TICKETS =====
     if (cmd === 'panel-ticket') {
       if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({ content: "Permission refusée.", ephemeral: true });
-      const embed = new EmbedBuilder().setColor(COLOR).setTitle('Support — Ouvrir un ticket').setDescription('Choisis une catégorie. Un salon privé sera créé.');
-      const select = new StringSelectMenuBuilder().setCustomId(PANEL_SELECT_ID).setPlaceholder('Choisis une catégorie').addOptions(TICKET_CATEGORIES.map(c => ({ label: `Tickets ${c}`, description: "Ouvrir un ticket d'assistance", value: c })));
+      const embed = new EmbedBuilder().setColor(0xf5a623)
+        .setAuthor({ name: interaction.guild.name, iconURL: interaction.guild.iconURL() || undefined })
+        .setThumbnail(interaction.guild.iconURL({ size: 256 }) || null)
+        .setTitle("🎫 Centre d'Assistance & Recours")
+        .setDescription("Choisis la catégorie correspondant à ta demande dans le menu ci-dessous. Un salon privé sera créé pour toi.")
+        .addFields(TICKET_CATEGORIES.map(c => ({ name: `${TICKET_CATEGORY_INFO[c].emoji} Tickets ${c}`, value: TICKET_CATEGORY_INFO[c].desc })));
+      const select = new StringSelectMenuBuilder().setCustomId(PANEL_SELECT_ID).setPlaceholder('Choisis une catégorie').addOptions(TICKET_CATEGORIES.map(c => ({ label: `Tickets ${c}`, description: "Ouvrir un ticket d'assistance", emoji: TICKET_CATEGORY_INFO[c].emoji, value: c })));
       await interaction.channel.send({ embeds: [embed], components: [new ActionRowBuilder().addComponents(select)] });
       return interaction.reply({ content: 'Panneau publié.', ephemeral: true });
     }
