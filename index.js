@@ -45,6 +45,8 @@ const DEFAULT_SETTINGS = {
   horaireText: "Aucun horaire défini. /set-horaire pour le configurer.",
   automod: { antiInvite: true, antiCaps: true, antiMassMention: true, antiRaid: true },
   recentJoins: [],
+  levelRewards: {},
+  levelUpChannelId: null,
 };
 let settings = { ...DEFAULT_SETTINGS, ...loadJson(SETTINGS_PATH, {}) };
 settings.automod = { ...DEFAULT_SETTINGS.automod, ...(settings.automod || {}) };
@@ -71,14 +73,31 @@ function countType(rec, type) { return rec.history.filter(h => h.type === type).
 
 function xpForNextLevel(l) { return 100 * (l + 1); }
 function addXp(userId, amount) {
-  if (!levels[userId]) levels[userId] = { xp: 0, level: 0 };
+  if (!levels[userId]) levels[userId] = { xp: 0, level: 0, messages: 0 };
   const u = levels[userId];
   u.xp += amount;
+  u.messages = (u.messages || 0) + 1;
   let up = false;
   while (u.xp >= xpForNextLevel(u.level)) { u.xp -= xpForNextLevel(u.level); u.level += 1; up = true; }
   saveJson(LEVELS_PATH, levels);
   return { level: u.level, leveledUp: up };
 }
+function progressBar(current, total, length = 14) {
+  const ratio = Math.max(0, Math.min(1, current / total));
+  const filled = Math.round(ratio * length);
+  return '▰'.repeat(filled) + '▱'.repeat(length - filled);
+}
+function getRank(userId) {
+  const sorted = Object.entries(levels).sort((a, b) => (b[1].level - a[1].level) || (b[1].xp - a[1].xp));
+  const idx = sorted.findIndex(([id]) => id === userId);
+  return idx === -1 ? sorted.length + 1 : idx + 1;
+}
+async function checkLevelRewards(guild, member, level) {
+  const roleId = (settings.levelRewards || {})[level];
+  if (!roleId) return;
+  await member.roles.add(roleId).catch(() => {});
+}
+
 
 const spamTracker = new Map();
 const SPAM_WINDOW_MS = 5000, SPAM_LIMIT = 5;
@@ -523,20 +542,80 @@ client.on('interactionCreate', async (interaction) => {
       { name: '🎫 Support', value: '/panel-ticket /close /recrutement /staff /signalement' },
       { name: '🎉 Utilitaires', value: '/ping /avatar /userinfo /serverinfo /suggestion /annonce' },
       { name: '🎮 Fun', value: '/8ball /des /pileouface' },
-      { name: '📈 Niveaux', value: '/rank /leaderboard' },
+      { name: '📈 Niveaux', value: '/niveau voir /niveau ajouter /niveau retirer /niveau set /niveau reset /niveau config /niveau recompense /classement' },
     )] });
 
     // ===== NIVEAUX =====
-    if (cmd === 'rank') {
-      const target = interaction.options.getUser('membre') || interaction.user;
-      const data = levels[target.id] || { xp: 0, level: 0 };
-      return interaction.reply({ embeds: [new EmbedBuilder().setColor(COLOR).setTitle(`Niveau de ${target.username}`).setThumbnail(target.displayAvatarURL()).addFields({ name: 'Niveau', value: `${data.level}`, inline: true }, { name: 'XP', value: `${data.xp} / ${xpForNextLevel(data.level)}`, inline: true })] });
+    if (cmd === 'niveau') {
+      const sub = interaction.options.getSubcommand();
+
+      if (sub === 'voir') {
+        const target = interaction.options.getUser('membre') || interaction.user;
+        const data = levels[target.id] || { xp: 0, level: 0, messages: 0 };
+        const needed = xpForNextLevel(data.level);
+        const embed = new EmbedBuilder().setColor(0xf5a623)
+          .setAuthor({ name: target.username, iconURL: target.displayAvatarURL() })
+          .setTitle('📊 Statistiques de niveau')
+          .addFields(
+            { name: '🏅 Niveau', value: `${data.level}`, inline: true },
+            { name: '⭐ XP', value: `${data.xp} / ${needed}`, inline: true },
+            { name: '📈 Rang', value: `#${getRank(target.id)}`, inline: true },
+            { name: '💬 Messages envoyés', value: `${data.messages || 0}`, inline: true },
+            { name: `Progression → Niveau ${data.level + 1}`, value: `${progressBar(data.xp, needed)}  ${data.xp}/${needed} XP` },
+          );
+        return interaction.reply({ embeds: [embed] });
+      }
+
+      if (['ajouter', 'retirer', 'set', 'reset', 'config', 'recompense'].includes(sub) && !interaction.memberPermissions.has(PermissionsBitField.Flags.ManageGuild)) {
+        return interaction.reply({ content: "Permission refusée.", ephemeral: true });
+      }
+
+      if (sub === 'ajouter') {
+        const target = interaction.options.getUser('membre'); const xp = interaction.options.getInteger('xp');
+        const { level, leveledUp } = addXp(target.id, xp);
+        return interaction.reply({ content: `✅ ${xp} XP ajouté(s) à <@${target.id}>. Niveau actuel : ${level}${leveledUp ? ' (a monté de niveau !)' : ''}` });
+      }
+      if (sub === 'retirer') {
+        const target = interaction.options.getUser('membre'); const xp = interaction.options.getInteger('xp');
+        if (!levels[target.id]) levels[target.id] = { xp: 0, level: 0, messages: 0 };
+        levels[target.id].xp = Math.max(0, levels[target.id].xp - xp);
+        saveJson(LEVELS_PATH, levels);
+        return interaction.reply({ content: `✅ ${xp} XP retiré(s) à <@${target.id}>.` });
+      }
+      if (sub === 'set') {
+        const target = interaction.options.getUser('membre'); const niveau = interaction.options.getInteger('niveau');
+        levels[target.id] = { xp: 0, level: niveau, messages: (levels[target.id]?.messages) || 0 };
+        saveJson(LEVELS_PATH, levels);
+        return interaction.reply({ content: `✅ <@${target.id}> est maintenant niveau ${niveau}.` });
+      }
+      if (sub === 'reset') {
+        const target = interaction.options.getUser('membre');
+        levels[target.id] = { xp: 0, level: 0, messages: 0 };
+        saveJson(LEVELS_PATH, levels);
+        return interaction.reply({ content: `✅ Niveau de <@${target.id}> réinitialisé.` });
+      }
+      if (sub === 'config') {
+        const salon = interaction.options.getChannel('salon');
+        settings.levelUpChannelId = salon ? salon.id : null;
+        saveJson(SETTINGS_PATH, settings);
+        return interaction.reply({ content: salon ? `✅ Les messages de niveau seront envoyés dans <#${salon.id}>.` : '✅ Les messages de niveau seront envoyés dans le salon où le membre écrit.', ephemeral: true });
+      }
+      if (sub === 'recompense') {
+        const niveau = interaction.options.getInteger('niveau'); const role = interaction.options.getRole('role');
+        settings.levelRewards = settings.levelRewards || {};
+        settings.levelRewards[niveau] = role.id;
+        saveJson(SETTINGS_PATH, settings);
+        return interaction.reply({ content: `✅ Le rôle ${role} sera donné automatiquement au niveau ${niveau}.` });
+      }
     }
-    if (cmd === 'leaderboard') {
-      const sorted = Object.entries(levels).sort((a, b) => (b[1].level - a[1].level) || (b[1].xp - a[1].xp)).slice(0, 10);
-      if (sorted.length === 0) return interaction.reply({ content: "Personne n'a encore gagné d'XP." });
-      const lines = await Promise.all(sorted.map(async ([uid, d], i) => { const u = await client.users.fetch(uid).catch(() => null); return `**${i + 1}.** ${u ? u.username : 'Inconnu'} — Niveau ${d.level} (${d.xp} XP)`; }));
-      return interaction.reply({ embeds: [new EmbedBuilder().setColor(COLOR).setTitle('🏆 Classement').setDescription(lines.join('\n'))] });
+
+    if (cmd === 'classement') {
+      const page = 0;
+      return interaction.reply({ embeds: [buildClassementEmbed(page)], components: [buildClassementRow(page)] });
+    }
+    if (interaction.isButton() && interaction.customId.startsWith('classement_page:')) {
+      const page = parseInt(interaction.customId.split(':')[1], 10);
+      return interaction.update({ embeds: [buildClassementEmbed(page)], components: [buildClassementRow(page)] });
     }
 
     // ===== RP =====
@@ -749,8 +828,45 @@ client.on('messageCreate', async (message) => {
   if (now - lastGain < 30000) return;
   xpCooldown.set(message.author.id, now);
   const { level, leveledUp } = addXp(message.author.id, Math.floor(Math.random() * 10) + 5);
-  if (leveledUp) message.channel.send(`🎉 <@${message.author.id}> passe **niveau ${level}** !`).catch(() => {});
+  if (leveledUp) {
+    const data = levels[message.author.id];
+    const needed = xpForNextLevel(level);
+    const embed = new EmbedBuilder().setColor(0xf5c518)
+      .setTitle('⬆️ Niveau supérieur !')
+      .setDescription(`Félicitations <@${message.author.id}> ! Tu viens d'atteindre le **niveau ${level}** ! 🎉`)
+      .addFields(
+        { name: '📊 Niveau', value: `${level}`, inline: true },
+        { name: '⭐ XP Total', value: `${data.xp}`, inline: true },
+        { name: `Progression → Niveau ${level + 1}`, value: `${progressBar(data.xp, needed)}  ${data.xp}/${needed} XP` },
+      )
+      .setFooter({ text: `${message.guild.name} • Niveaux` });
+    const targetChannel = settings.levelUpChannelId ? message.guild.channels.cache.get(settings.levelUpChannelId) : message.channel;
+    (targetChannel || message.channel).send({ embeds: [embed] }).catch(() => {});
+    checkLevelRewards(message.guild, message.member, level);
+  }
 });
+
+function buildClassementEmbed(page) {
+  const PAGE_SIZE = 10;
+  const sorted = Object.entries(levels).sort((a, b) => (b[1].level - a[1].level) || (b[1].xp - a[1].xp));
+  const pageItems = sorted.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const embed = new EmbedBuilder().setColor(0xf5a623).setTitle('🏆 Classement du serveur');
+  if (pageItems.length === 0) {
+    embed.setDescription("Personne n'a encore gagné d'XP.");
+  } else {
+    const lines = pageItems.map(([uid, d], i) => `**#${page * PAGE_SIZE + i + 1}** — <@${uid}> • Niveau ${d.level} (${d.xp} XP)`);
+    embed.setDescription(lines.join('\n'));
+  }
+  embed.setFooter({ text: `Page ${page + 1} / ${Math.max(1, Math.ceil(sorted.length / PAGE_SIZE))}` });
+  return embed;
+}
+function buildClassementRow(page) {
+  const totalPages = Math.max(1, Math.ceil(Object.keys(levels).length / 10));
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`classement_page:${page - 1}`).setLabel('◀️ Précédent').setStyle(ButtonStyle.Secondary).setDisabled(page <= 0),
+    new ButtonBuilder().setCustomId(`classement_page:${page + 1}`).setLabel('Suivant ▶️').setStyle(ButtonStyle.Secondary).setDisabled(page + 1 >= totalPages),
+  );
+}
 
 async function closeTicket(interaction) {
   const channel = interaction.channel;

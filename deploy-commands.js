@@ -93,8 +93,15 @@ const commands = [
   new SlashCommandBuilder().setName('help').setDescription('Affiche toutes les commandes'),
 
   // ----- Niveaux -----
-  new SlashCommandBuilder().setName('rank').setDescription('Affiche ton niveau').addUserOption(o => o.setName('membre').setDescription('Membre').setRequired(false)),
-  new SlashCommandBuilder().setName('leaderboard').setDescription('Classement des membres actifs'),
+  new SlashCommandBuilder().setName('niveau').setDescription('Système de niveaux')
+    .addSubcommand(s => s.setName('voir').setDescription('Affiche ton niveau et tes statistiques').addUserOption(o => o.setName('membre').setDescription('Membre').setRequired(false)))
+    .addSubcommand(s => s.setName('ajouter').setDescription("Ajoute de l'XP à un membre (staff)").addUserOption(o => o.setName('membre').setDescription('Membre').setRequired(true)).addIntegerOption(o => o.setName('xp').setDescription("Quantité d'XP").setRequired(true)))
+    .addSubcommand(s => s.setName('retirer').setDescription("Retire de l'XP à un membre (staff)").addUserOption(o => o.setName('membre').setDescription('Membre').setRequired(true)).addIntegerOption(o => o.setName('xp').setDescription("Quantité d'XP").setRequired(true)))
+    .addSubcommand(s => s.setName('set').setDescription('Définit le niveau exact d\'un membre (staff)').addUserOption(o => o.setName('membre').setDescription('Membre').setRequired(true)).addIntegerOption(o => o.setName('niveau').setDescription('Niveau').setRequired(true)))
+    .addSubcommand(s => s.setName('reset').setDescription('Réinitialise le niveau d\'un membre (staff)').addUserOption(o => o.setName('membre').setDescription('Membre').setRequired(true)))
+    .addSubcommand(s => s.setName('config').setDescription('Définit le salon des messages de niveau (staff)').addChannelOption(o => o.setName('salon').setDescription('Salon (vide = salon courant)').setRequired(false)))
+    .addSubcommand(s => s.setName('recompense').setDescription('Associe un rôle à un niveau (staff)').addIntegerOption(o => o.setName('niveau').setDescription('Niveau requis').setRequired(true)).addRoleOption(o => o.setName('role').setDescription('Rôle donné').setRequired(true))),
+  new SlashCommandBuilder().setName('classement').setDescription('Classement des membres les plus actifs (paginé)'),
 
   // ----- Roleplay -----
   new SlashCommandBuilder().setName('creer-personnage').setDescription('Crée ta fiche de personnage')
