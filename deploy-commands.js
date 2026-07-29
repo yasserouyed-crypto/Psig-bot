@@ -1,10 +1,10 @@
 require('dotenv').config();
-const { REST, Routes, SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
-const config = require('./config.json');
+const { REST, Routes, SlashCommandBuilder, PermissionFlagsBits, ChannelType } = require('discord.js');
 
 const commands = [
   // ----- Tickets -----
   new SlashCommandBuilder().setName('panel-ticket').setDescription('Publie le panneau de tickets de support').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+  new SlashCommandBuilder().setName('panel').setDescription("Ouvre le centre de contrôle de l'administration").setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
   new SlashCommandBuilder().setName('close').setDescription('Ferme le ticket en cours'),
   new SlashCommandBuilder().setName('recrutement').setDescription('Candidature de recrutement'),
   new SlashCommandBuilder().setName('staff').setDescription("Candidature pour l'équipe staff"),
@@ -82,6 +82,12 @@ const commands = [
     .addChannelOption(o => o.setName('salon').setDescription('Salon').setRequired(true)),
   new SlashCommandBuilder().setName('set-logs').setDescription('Définit le salon de logs').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addChannelOption(o => o.setName('salon').setDescription('Salon').setRequired(true)),
+  new SlashCommandBuilder().setName('set-staffrole').setDescription('Définit le rôle staff qui gère les tickets et la modération').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addRoleOption(o => o.setName('role').setDescription('Rôle staff').setRequired(true)),
+  new SlashCommandBuilder().setName('set-ticketcategorie').setDescription('Définit la catégorie où créer les salons de tickets').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addChannelOption(o => o.setName('categorie').setDescription('Catégorie').addChannelTypes(ChannelType.GuildCategory).setRequired(true)),
+  new SlashCommandBuilder().setName('set-rolecivil').setDescription('Définit le rôle donné automatiquement aux nouveaux membres').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addRoleOption(o => o.setName('role').setDescription('Rôle civil').setRequired(true)),
 
   // ----- Informations -----
   new SlashCommandBuilder().setName('reglement').setDescription('Affiche le règlement'),
@@ -137,7 +143,7 @@ const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 (async () => {
   try {
     console.log('Déploiement des commandes slash...');
-    await rest.put(Routes.applicationGuildCommands(process.env.CLIENT_ID, config.guildId), { body: commands });
+    await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
     console.log(`Commandes slash déployées avec succès (${commands.length}).`);
   } catch (error) {
     console.error(error);
