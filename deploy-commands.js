@@ -88,6 +88,9 @@ const commands = [
     .addChannelOption(o => o.setName('categorie').setDescription('Catégorie').addChannelTypes(ChannelType.GuildCategory).setRequired(true)),
   new SlashCommandBuilder().setName('set-rolecivil').setDescription('Définit le rôle donné automatiquement aux nouveaux membres').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addRoleOption(o => o.setName('role').setDescription('Rôle civil').setRequired(true)),
+  new SlashCommandBuilder().setName('panel-reglement').setDescription('Publie le règlement avec un bouton d\'acceptation').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+  new SlashCommandBuilder().setName('set-role-reglement').setDescription('Définit le rôle donné après acceptation du règlement').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addRoleOption(o => o.setName('role').setDescription('Rôle à donner').setRequired(true)),
 
   // ----- Informations -----
   new SlashCommandBuilder().setName('reglement').setDescription('Affiche le règlement'),

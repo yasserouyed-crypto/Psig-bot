@@ -56,6 +56,7 @@ const DEFAULT_SETTINGS = {
   recentJoins: [],
   levelRewards: {},
   levelUpChannelId: null,
+  reglementRoleId: null,
 };
 // settingsAll[guildId] = { ...DEFAULT_SETTINGS }  -> réglages propres à CHAQUE serveur
 let settingsAll = loadJson(SETTINGS_PATH, {});
@@ -202,16 +203,21 @@ async function askAI(question) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return "L'IA n'est pas encore configurée (clé API manquante).";
   try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ contents: [{ parts: [{ text: question }] }] }),
     });
     const data = await res.json();
+    if (!res.ok || data.error) {
+      console.error('Erreur IA (réponse API) :', JSON.stringify(data));
+      return `Erreur IA : ${data?.error?.message || 'réponse invalide de l\'API'}.`;
+    }
     const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) console.error('Erreur IA (pas de texte) :', JSON.stringify(data));
     return text ? text.slice(0, 1900) : "Je n'ai pas pu générer de réponse, réessaie avec une autre question.";
   } catch (err) {
-    console.error('Erreur IA:', err);
+    console.error('Erreur IA (exception) :', err);
     return "Une erreur est survenue en contactant l'IA.";
   }
 }
@@ -220,8 +226,16 @@ client.once('ready', () => console.log(`Connecté en tant que ${client.user.tag}
 
 client.on('interactionCreate', async (interaction) => {
   try {
-    if (!interaction.guild) {
+    if (!interaction.guildId) {
       if (interaction.isRepliable()) await interaction.reply({ content: "Cette commande ne fonctionne que sur un serveur Discord.", ephemeral: true }).catch(() => {});
+      return;
+    }
+    if (!interaction.guild) {
+      // Le bot vient peut-être de se reconnecter (réveil après inactivité) : on recharge le serveur concerné
+      await client.guilds.fetch(interaction.guildId).catch(() => {});
+    }
+    if (!interaction.guild) {
+      if (interaction.isRepliable()) await interaction.reply({ content: "Le bot vient de redémarrer, réessaie dans quelques secondes.", ephemeral: true }).catch(() => {});
       return;
     }
     const cmd = interaction.isChatInputCommand() ? interaction.commandName : null;
@@ -233,12 +247,20 @@ client.on('interactionCreate', async (interaction) => {
         .setAuthor({ name: interaction.guild.name, iconURL: interaction.guild.iconURL() || undefined })
         .setThumbnail(BOT_ICON())
         .setTitle("🎫 ・ Centre d'Assistance & Recours")
-        .setDescription("Choisis la catégorie correspondant à ta demande dans le menu ci-dessous.\n*Un salon privé sera créé instantanément pour toi.*")
+        .setDescription("Choisis la catégorie correspondant à ta demande en appuyant sur un bouton ci-dessous.\n*Un salon privé sera créé instantanément pour toi.*")
         .addFields(TICKET_CATEGORIES.map(c => ({ name: `${TICKET_CATEGORY_INFO[c].emoji}  Tickets ${c}`, value: TICKET_CATEGORY_INFO[c].desc })))
         .setFooter({ text: `${interaction.guild.name} • Support premium`, iconURL: BOT_ICON() })
         .setTimestamp();
-      const select = new StringSelectMenuBuilder().setCustomId(PANEL_SELECT_ID).setPlaceholder('✨ Choisis une catégorie').addOptions(TICKET_CATEGORIES.map(c => ({ label: `Tickets ${c}`, description: "Ouvrir un ticket d'assistance", emoji: TICKET_CATEGORY_INFO[c].emoji, value: c })));
-      await interaction.channel.send({ embeds: [embed], components: [new ActionRowBuilder().addComponents(select)] });
+      const rows = [];
+      for (let i = 0; i < TICKET_CATEGORIES.length; i += 5) {
+        const row = new ActionRowBuilder();
+        TICKET_CATEGORIES.slice(i, i + 5).forEach((c, j) => {
+          const idx = i + j;
+          row.addComponents(new ButtonBuilder().setCustomId(`ticket_open_btn:${idx}`).setLabel(c).setEmoji(TICKET_CATEGORY_INFO[c].emoji).setStyle(ButtonStyle.Primary));
+        });
+        rows.push(row);
+      }
+      await interaction.channel.send({ embeds: [embed], components: rows });
       return interaction.reply({ content: '✅ Panneau publié.', ephemeral: true });
     }
     // ===== CENTRE DE CONTRÔLE =====
@@ -403,10 +425,11 @@ client.on('interactionCreate', async (interaction) => {
       if (!interaction.channel.topic?.startsWith('ticket-owner:')) return interaction.reply({ content: "Utilisable seulement dans un ticket.", ephemeral: true });
       return closeTicket(interaction);
     }
-    if (interaction.isStringSelectMenu() && interaction.customId === PANEL_SELECT_ID) {
+    if (interaction.isButton() && interaction.customId.startsWith('ticket_open_btn:')) {
       const existing = await findExistingTicket(interaction.guild, interaction.user.id);
       if (existing) return interaction.reply({ content: `Ticket déjà ouvert : <#${existing.id}>`, ephemeral: true });
-      const category = interaction.values[0];
+      const idx = parseInt(interaction.customId.split(':')[1], 10);
+      const category = TICKET_CATEGORIES[idx];
       const modal = new ModalBuilder().setCustomId(`${MODAL_ID}:${encodeURIComponent(category)}`).setTitle(`Ticket — ${category}`);
       modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('details').setLabel('Décris ta demande').setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(1000)));
       return interaction.showModal(modal);
@@ -764,6 +787,33 @@ client.on('interactionCreate', async (interaction) => {
 
     // ===== INFOS =====
     if (cmd === 'reglement') return interaction.reply({ embeds: [new EmbedBuilder().setColor(COLOR).setTitle('📜 Règlement').setDescription(getSettings(interaction.guild.id).reglementText)] });
+    if (cmd === 'panel-reglement') {
+      if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({ content: "Permission refusée.", ephemeral: true });
+      const s = getSettings(interaction.guild.id);
+      const embed = new EmbedBuilder().setColor(COLOR)
+        .setAuthor({ name: interaction.guild.name, iconURL: interaction.guild.iconURL() || undefined })
+        .setThumbnail(BOT_ICON())
+        .setTitle('📜 ・ Règlement du serveur')
+        .setDescription(s.reglementText)
+        .setFooter({ text: 'Appuie sur le bouton ci-dessous pour accepter et accéder au serveur.' });
+      const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('reglement_accept').setLabel("J'accepte le règlement").setEmoji('✅').setStyle(ButtonStyle.Success));
+      await interaction.channel.send({ embeds: [embed], components: [row] });
+      return interaction.reply({ content: '✅ Panneau de règlement publié.', ephemeral: true });
+    }
+    if (interaction.isButton() && interaction.customId === 'reglement_accept') {
+      const s = getSettings(interaction.guild.id);
+      if (!s.reglementRoleId) return interaction.reply({ content: "Aucun rôle n'est configuré pour l'acceptation du règlement (utilise /set-role-reglement).", ephemeral: true });
+      if (interaction.member.roles.cache.has(s.reglementRoleId)) return interaction.reply({ content: '✅ Tu as déjà accepté le règlement.', ephemeral: true });
+      await interaction.member.roles.add(s.reglementRoleId).catch(() => {});
+      return interaction.reply({ content: '✅ Règlement accepté, bienvenue sur le serveur !', ephemeral: true });
+    }
+    if (cmd === 'set-role-reglement') {
+      if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({ content: "Permission refusée.", ephemeral: true });
+      const s = getSettings(interaction.guild.id);
+      s.reglementRoleId = interaction.options.getRole('role').id;
+      saveSettings();
+      return interaction.reply({ content: '✅ Rôle donné après acceptation du règlement défini.', ephemeral: true });
+    }
     if (cmd === 'liens') return interaction.reply({ embeds: [new EmbedBuilder().setColor(COLOR).setTitle('🔗 Liens utiles').setDescription(getSettings(interaction.guild.id).liensText)] });
     if (cmd === 'urgence') return interaction.reply({ embeds: [new EmbedBuilder().setColor(COLOR).setTitle("🚨 Numéros d'urgence").setDescription(getSettings(interaction.guild.id).urgenceText)] });
     if (cmd === 'horaire') return interaction.reply({ embeds: [new EmbedBuilder().setColor(COLOR).setTitle('🕒 Horaires').setDescription(getSettings(interaction.guild.id).horaireText)] });
