@@ -208,20 +208,27 @@ async function logModeration(guild, action, targetUser, moderator, reason) {
 }
 
 async function askAI(question) {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return "L'IA n'est pas encore configurée (clé API manquante).";
   try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ parts: [{ text: question }] }] }),
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: 'Tu es un assistant utile et concis sur un serveur Discord. Réponds en français.' },
+          { role: 'user', content: question },
+        ],
+        max_tokens: 500,
+      }),
     });
     const data = await res.json();
     if (!res.ok || data.error) {
       console.error('Erreur IA (réponse API) :', JSON.stringify(data));
       return `Erreur IA : ${data?.error?.message || 'réponse invalide de l\'API'}.`;
     }
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    const text = data?.choices?.[0]?.message?.content;
     if (!text) console.error('Erreur IA (pas de texte) :', JSON.stringify(data));
     return text ? text.slice(0, 1900) : "Je n'ai pas pu générer de réponse, réessaie avec une autre question.";
   } catch (err) {
