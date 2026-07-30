@@ -220,6 +220,10 @@ client.once('ready', () => console.log(`Connecté en tant que ${client.user.tag}
 
 client.on('interactionCreate', async (interaction) => {
   try {
+    if (!interaction.guild) {
+      if (interaction.isRepliable()) await interaction.reply({ content: "Cette commande ne fonctionne que sur un serveur Discord.", ephemeral: true }).catch(() => {});
+      return;
+    }
     const cmd = interaction.isChatInputCommand() ? interaction.commandName : null;
 
     // ===== TICKETS =====
