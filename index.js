@@ -57,6 +57,7 @@ const DEFAULT_SETTINGS = {
   levelRewards: {},
   levelUpChannelId: null,
   reglementRoleId: null,
+  ticketCategories: [],
 };
 // settingsAll[guildId] = { ...DEFAULT_SETTINGS }  -> réglages propres à CHAQUE serveur
 let settingsAll = loadJson(SETTINGS_PATH, {});
@@ -134,16 +135,23 @@ async function findExistingTicket(guild, userId) {
   if (!category) return null;
   return guild.channels.cache.find(ch => ch.parentId === s.ticketCategoryId && ch.topic === `ticket-owner:${userId}`);
 }
-const TICKET_CATEGORY_INFO = {
-  'Fondation': { emoji: '👑', desc: '• Décale / Fusion.\n• Propositions.' },
-  'Reports Staff': { emoji: '🚫', desc: "• Pour signaler le comportement abusif d'un Staff." },
-  'Partenariats': { emoji: '🔗', desc: '• Demande de partenariat avec notre serveur.' },
-  'Questions': { emoji: '❓', desc: "• Pose une question générale à l'équipe." },
-  'Unban': { emoji: '🔓', desc: '• Demande de débannissement.' },
-  'Reports Joueurs': { emoji: '🚨', desc: '• Signale un joueur qui enfreint le règlement.' },
-  'Entreprises': { emoji: '🏢', desc: "• Demande liée à la création ou gestion d'une entreprise." },
-};
-const TICKET_CATEGORIES = Object.keys(TICKET_CATEGORY_INFO);
+const DEFAULT_TICKET_CATEGORIES = [
+  { nom: 'Fondation', emoji: '👑', desc: '• Décale / Fusion.\n• Propositions.' },
+  { nom: 'Reports Staff', emoji: '🚫', desc: "• Pour signaler le comportement abusif d'un Staff." },
+  { nom: 'Partenariats', emoji: '🔗', desc: '• Demande de partenariat avec notre serveur.' },
+  { nom: 'Questions', emoji: '❓', desc: "• Pose une question générale à l'équipe." },
+  { nom: 'Unban', emoji: '🔓', desc: '• Demande de débannissement.' },
+  { nom: 'Reports Joueurs', emoji: '🚨', desc: '• Signale un joueur qui enfreint le règlement.' },
+  { nom: 'Entreprises', emoji: '🏢', desc: "• Demande liée à la création ou gestion d'une entreprise." },
+];
+function getTicketCategories(guildId) {
+  const s = getSettings(guildId);
+  if (!s.ticketCategories || s.ticketCategories.length === 0) {
+    s.ticketCategories = JSON.parse(JSON.stringify(DEFAULT_TICKET_CATEGORIES));
+    saveSettings();
+  }
+  return s.ticketCategories;
+}
 const SUBJECT_BUTTON_ID = 'ticket_subject';
 const ADD_BUTTON_ID = 'ticket_add';
 const REMOVE_BUTTON_ID = 'ticket_remove';
@@ -243,25 +251,51 @@ client.on('interactionCreate', async (interaction) => {
     // ===== TICKETS =====
     if (cmd === 'panel-ticket') {
       if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({ content: "Permission refusée.", ephemeral: true });
+      const categories = getTicketCategories(interaction.guild.id);
       const embed = new EmbedBuilder().setColor(COLOR)
         .setAuthor({ name: interaction.guild.name, iconURL: interaction.guild.iconURL() || undefined })
         .setThumbnail(BOT_ICON())
         .setTitle("🎫 ・ Centre d'Assistance & Recours")
         .setDescription("Choisis la catégorie correspondant à ta demande en appuyant sur un bouton ci-dessous.\n*Un salon privé sera créé instantanément pour toi.*")
-        .addFields(TICKET_CATEGORIES.map(c => ({ name: `${TICKET_CATEGORY_INFO[c].emoji}  Tickets ${c}`, value: TICKET_CATEGORY_INFO[c].desc })))
+        .addFields(categories.map(c => ({ name: `${c.emoji}  Tickets ${c.nom}`, value: c.desc })))
         .setFooter({ text: `${interaction.guild.name} • Support premium`, iconURL: BOT_ICON() })
         .setTimestamp();
       const rows = [];
-      for (let i = 0; i < TICKET_CATEGORIES.length; i += 5) {
+      for (let i = 0; i < categories.length; i += 5) {
         const row = new ActionRowBuilder();
-        TICKET_CATEGORIES.slice(i, i + 5).forEach((c, j) => {
+        categories.slice(i, i + 5).forEach((c, j) => {
           const idx = i + j;
-          row.addComponents(new ButtonBuilder().setCustomId(`ticket_open_btn:${idx}`).setLabel(c).setEmoji(TICKET_CATEGORY_INFO[c].emoji).setStyle(ButtonStyle.Primary));
+          row.addComponents(new ButtonBuilder().setCustomId(`ticket_open_btn:${idx}`).setLabel(c.nom).setEmoji(c.emoji).setStyle(ButtonStyle.Primary));
         });
         rows.push(row);
       }
       await interaction.channel.send({ embeds: [embed], components: rows });
       return interaction.reply({ content: '✅ Panneau publié.', ephemeral: true });
+    }
+    if (cmd === 'ticket-categorie-ajouter') {
+      if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({ content: "Permission refusée.", ephemeral: true });
+      const categories = getTicketCategories(interaction.guild.id);
+      if (categories.length >= 20) return interaction.reply({ content: "Maximum de 20 catégories atteint.", ephemeral: true });
+      const nom = interaction.options.getString('nom');
+      const emoji = interaction.options.getString('emoji') || '🎫';
+      const description = interaction.options.getString('description');
+      categories.push({ nom, emoji, desc: `• ${description}` });
+      saveSettings();
+      return interaction.reply({ content: `✅ Catégorie **${nom}** ajoutée. Republie le panneau avec /panel-ticket pour la voir apparaître.`, ephemeral: true });
+    }
+    if (cmd === 'ticket-categorie-supprimer') {
+      if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({ content: "Permission refusée.", ephemeral: true });
+      const s = getSettings(interaction.guild.id);
+      const categories = getTicketCategories(interaction.guild.id);
+      const nom = interaction.options.getString('nom');
+      const before = categories.length;
+      s.ticketCategories = categories.filter(c => c.nom.toLowerCase() !== nom.toLowerCase());
+      saveSettings();
+      return interaction.reply({ content: s.ticketCategories.length < before ? `✅ Catégorie **${nom}** supprimée.` : `Catégorie introuvable.`, ephemeral: true });
+    }
+    if (cmd === 'ticket-categorie-liste') {
+      const categories = getTicketCategories(interaction.guild.id);
+      return interaction.reply({ embeds: [new EmbedBuilder().setColor(COLOR).setTitle('🎫 Catégories de tickets').setDescription(categories.map(c => `${c.emoji} **${c.nom}** — ${c.desc}`).join('\n\n'))], ephemeral: true });
     }
     // ===== CENTRE DE CONTRÔLE =====
     if (cmd === 'panel') {
@@ -429,7 +463,8 @@ client.on('interactionCreate', async (interaction) => {
       const existing = await findExistingTicket(interaction.guild, interaction.user.id);
       if (existing) return interaction.reply({ content: `Ticket déjà ouvert : <#${existing.id}>`, ephemeral: true });
       const idx = parseInt(interaction.customId.split(':')[1], 10);
-      const category = TICKET_CATEGORIES[idx];
+      const categories = getTicketCategories(interaction.guild.id);
+      const category = categories[idx]?.nom || 'Support';
       const modal = new ModalBuilder().setCustomId(`${MODAL_ID}:${encodeURIComponent(category)}`).setTitle(`Ticket — ${category}`);
       modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('details').setLabel('Décris ta demande').setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(1000)));
       return interaction.showModal(modal);

@@ -4,6 +4,13 @@ const { REST, Routes, SlashCommandBuilder, PermissionFlagsBits, ChannelType } = 
 const commands = [
   // ----- Tickets -----
   new SlashCommandBuilder().setName('panel-ticket').setDescription('Publie le panneau de tickets de support').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+  new SlashCommandBuilder().setName('ticket-categorie-ajouter').setDescription('Ajoute une catégorie de ticket personnalisée').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addStringOption(o => o.setName('nom').setDescription('Nom de la catégorie').setRequired(true))
+    .addStringOption(o => o.setName('description').setDescription('Description affichée').setRequired(true))
+    .addStringOption(o => o.setName('emoji').setDescription('Emoji (ex: 🎫)').setRequired(false)),
+  new SlashCommandBuilder().setName('ticket-categorie-supprimer').setDescription('Supprime une catégorie de ticket').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addStringOption(o => o.setName('nom').setDescription('Nom exact de la catégorie').setRequired(true)),
+  new SlashCommandBuilder().setName('ticket-categorie-liste').setDescription('Liste les catégories de tickets actuelles'),
   new SlashCommandBuilder().setName('panel').setDescription("Ouvre le centre de contrôle de l'administration").setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
   new SlashCommandBuilder().setName('close').setDescription('Ferme le ticket en cours'),
   new SlashCommandBuilder().setName('recrutement').setDescription('Candidature de recrutement'),
