@@ -12,6 +12,7 @@ const commands = [
     .addStringOption(o => o.setName('nom').setDescription('Nom exact de la catégorie').setRequired(true)),
   new SlashCommandBuilder().setName('ticket-categorie-liste').setDescription('Liste les catégories de tickets actuelles'),
   new SlashCommandBuilder().setName('panel').setDescription("Ouvre le centre de contrôle de l'administration").setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+  new SlashCommandBuilder().setName('config').setDescription('Menu de configuration du bot (tickets, bienvenue, niveaux, logs...)').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
   new SlashCommandBuilder().setName('close').setDescription('Ferme le ticket en cours'),
   new SlashCommandBuilder().setName('recrutement').setDescription('Candidature de recrutement'),
   new SlashCommandBuilder().setName('staff').setDescription("Candidature pour l'équipe staff"),

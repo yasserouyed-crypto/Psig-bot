@@ -4,7 +4,7 @@ const path = require('path');
 const http = require('http');
 const {
   Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
-  StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, PermissionsBitField,
+  StringSelectMenuBuilder, RoleSelectMenuBuilder, ChannelSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, PermissionsBitField,
   ChannelType, AttachmentBuilder,
 } = require('discord.js');
 const config = require('./config.json');
@@ -304,6 +304,99 @@ client.on('interactionCreate', async (interaction) => {
       const categories = getTicketCategories(interaction.guild.id);
       return interaction.reply({ embeds: [new EmbedBuilder().setColor(COLOR).setTitle('🎫 Catégories de tickets').setDescription(categories.map(c => `${c.emoji} **${c.nom}** — ${c.desc}`).join('\n\n'))], ephemeral: true });
     }
+    // ===== CONFIGURATION (façon DraftBot) =====
+    if (cmd === 'config') {
+      if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({ content: "Permission refusée.", ephemeral: true });
+      const embed = new EmbedBuilder().setColor(COLOR).setThumbnail(BOT_ICON())
+        .setTitle('⚙️ Choisissez une catégorie de commandes...');
+      const select = new StringSelectMenuBuilder().setCustomId('config_main_menu').setPlaceholder('Sélectionne une catégorie').addOptions(
+        { label: 'Tickets', description: 'Rôle staff, catégorie, types de tickets', emoji: '🎫', value: 'tickets' },
+        { label: 'Bienvenue', description: 'Salon et rôle automatique', emoji: '👋', value: 'bienvenue' },
+        { label: 'Niveaux', description: 'Salon des annonces de niveau', emoji: '📈', value: 'niveaux' },
+        { label: 'Modération & Logs', description: 'Salon des logs', emoji: '🔨', value: 'logs' },
+        { label: 'Règlement', description: 'Rôle donné après acceptation', emoji: '📜', value: 'reglement' },
+        { label: 'Suggestions', description: 'Salon des suggestions', emoji: '💡', value: 'suggestions' },
+      );
+      return interaction.reply({ embeds: [embed], components: [new ActionRowBuilder().addComponents(select)], ephemeral: true });
+    }
+    if (interaction.isStringSelectMenu() && interaction.customId === 'config_main_menu') {
+      const s = getSettings(interaction.guild.id);
+      const value = interaction.values[0];
+      const backRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('config_back').setLabel('◀️ Retour').setStyle(ButtonStyle.Secondary));
+
+      if (value === 'tickets') {
+        const embed = new EmbedBuilder().setColor(COLOR).setTitle('🎫 Configuration — Tickets')
+          .setDescription(
+            `**Rôle staff :** ${s.staffRoleId ? `<@&${s.staffRoleId}>` : 'Non défini'}\n` +
+            `**Catégorie tickets :** ${s.ticketCategoryId ? `<#${s.ticketCategoryId}>` : 'Non définie'}\n` +
+            `**Types de tickets :** ${getTicketCategories(interaction.guild.id).length} configuré(s)\n\n` +
+            `Utilise les menus ci-dessous pour choisir le rôle et la catégorie.\nPour gérer les types de tickets, utilise \`/ticket-categorie-ajouter\`, \`/ticket-categorie-supprimer\` et \`/ticket-categorie-liste\`.`
+          );
+        const roleSelect = new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId('config_role_staff').setPlaceholder('Choisir le rôle staff'));
+        const catSelect = new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('config_channel_ticketcat').setPlaceholder('Choisir la catégorie tickets').addChannelTypes(ChannelType.GuildCategory));
+        return interaction.update({ embeds: [embed], components: [roleSelect, catSelect, backRow] });
+      }
+      if (value === 'bienvenue') {
+        const embed = new EmbedBuilder().setColor(COLOR).setTitle('👋 Configuration — Bienvenue')
+          .setDescription(`**Salon de bienvenue :** ${s.welcomeChannelId ? `<#${s.welcomeChannelId}>` : 'Non défini'}\n**Rôle automatique :** ${s.civilianRoleId ? `<@&${s.civilianRoleId}>` : 'Non défini'}`);
+        const chanSelect = new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('config_channel_welcome').setPlaceholder('Choisir le salon de bienvenue').addChannelTypes(ChannelType.GuildText));
+        const roleSelect = new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId('config_role_civil').setPlaceholder('Choisir le rôle automatique'));
+        return interaction.update({ embeds: [embed], components: [chanSelect, roleSelect, backRow] });
+      }
+      if (value === 'niveaux') {
+        const embed = new EmbedBuilder().setColor(COLOR).setTitle('📈 Configuration — Niveaux')
+          .setDescription(`**Salon des annonces de niveau :** ${s.levelUpChannelId ? `<#${s.levelUpChannelId}>` : "Salon où le membre écrit (par défaut)"}\n\nPour les récompenses de rôle par niveau, utilise \`/niveau recompense\`.`);
+        const chanSelect = new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('config_channel_levelup').setPlaceholder('Choisir le salon de niveau').addChannelTypes(ChannelType.GuildText));
+        return interaction.update({ embeds: [embed], components: [chanSelect, backRow] });
+      }
+      if (value === 'logs') {
+        const embed = new EmbedBuilder().setColor(COLOR).setTitle('🔨 Configuration — Modération & Logs')
+          .setDescription(`**Salon des logs :** ${s.logsChannelId ? `<#${s.logsChannelId}>` : 'Non défini'}`);
+        const chanSelect = new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('config_channel_logs').setPlaceholder('Choisir le salon de logs').addChannelTypes(ChannelType.GuildText));
+        return interaction.update({ embeds: [embed], components: [chanSelect, backRow] });
+      }
+      if (value === 'reglement') {
+        const embed = new EmbedBuilder().setColor(COLOR).setTitle('📜 Configuration — Règlement')
+          .setDescription(`**Rôle donné après acceptation :** ${s.reglementRoleId ? `<@&${s.reglementRoleId}>` : 'Non défini'}\n\nUtilise \`/set-reglement\` pour changer le texte, puis \`/panel-reglement\` pour le publier avec un bouton d'acceptation.`);
+        const roleSelect = new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId('config_role_reglement').setPlaceholder('Choisir le rôle à donner'));
+        return interaction.update({ embeds: [embed], components: [roleSelect, backRow] });
+      }
+      if (value === 'suggestions') {
+        const embed = new EmbedBuilder().setColor(COLOR).setTitle('💡 Configuration — Suggestions')
+          .setDescription(`**Salon des suggestions :** ${s.suggestionsChannelId ? `<#${s.suggestionsChannelId}>` : 'Salon courant (par défaut)'}`);
+        const chanSelect = new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('config_channel_suggestions').setPlaceholder('Choisir le salon de suggestions').addChannelTypes(ChannelType.GuildText));
+        return interaction.update({ embeds: [embed], components: [chanSelect, backRow] });
+      }
+    }
+    if (interaction.isButton() && interaction.customId === 'config_back') {
+      const embed = new EmbedBuilder().setColor(COLOR).setThumbnail(BOT_ICON()).setTitle('⚙️ Choisissez une catégorie de commandes...');
+      const select = new StringSelectMenuBuilder().setCustomId('config_main_menu').setPlaceholder('Sélectionne une catégorie').addOptions(
+        { label: 'Tickets', description: 'Rôle staff, catégorie, types de tickets', emoji: '🎫', value: 'tickets' },
+        { label: 'Bienvenue', description: 'Salon et rôle automatique', emoji: '👋', value: 'bienvenue' },
+        { label: 'Niveaux', description: 'Salon des annonces de niveau', emoji: '📈', value: 'niveaux' },
+        { label: 'Modération & Logs', description: 'Salon des logs', emoji: '🔨', value: 'logs' },
+        { label: 'Règlement', description: 'Rôle donné après acceptation', emoji: '📜', value: 'reglement' },
+        { label: 'Suggestions', description: 'Salon des suggestions', emoji: '💡', value: 'suggestions' },
+      );
+      return interaction.update({ embeds: [embed], components: [new ActionRowBuilder().addComponents(select)] });
+    }
+    if (interaction.isRoleSelectMenu() && interaction.customId.startsWith('config_role_')) {
+      const s = getSettings(interaction.guild.id);
+      const role = interaction.roles.first();
+      const map = { config_role_staff: 'staffRoleId', config_role_civil: 'civilianRoleId', config_role_reglement: 'reglementRoleId' };
+      s[map[interaction.customId]] = role.id;
+      saveSettings();
+      return interaction.reply({ content: `✅ ${role} enregistré.`, ephemeral: true });
+    }
+    if (interaction.isChannelSelectMenu() && interaction.customId.startsWith('config_channel_')) {
+      const s = getSettings(interaction.guild.id);
+      const channel = interaction.channels.first();
+      const map = { config_channel_ticketcat: 'ticketCategoryId', config_channel_welcome: 'welcomeChannelId', config_channel_levelup: 'levelUpChannelId', config_channel_logs: 'logsChannelId', config_channel_suggestions: 'suggestionsChannelId' };
+      s[map[interaction.customId]] = channel.id;
+      saveSettings();
+      return interaction.reply({ content: `✅ ${channel} enregistré.`, ephemeral: true });
+    }
+
     // ===== CENTRE DE CONTRÔLE =====
     if (cmd === 'panel') {
       if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({ content: "Permission refusée.", ephemeral: true });
