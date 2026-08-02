@@ -146,10 +146,7 @@ const DEFAULT_TICKET_CATEGORIES = [
 ];
 function getTicketCategories(guildId) {
   const s = getSettings(guildId);
-  if (!s.ticketCategories || s.ticketCategories.length === 0) {
-    s.ticketCategories = JSON.parse(JSON.stringify(DEFAULT_TICKET_CATEGORIES));
-    saveSettings();
-  }
+  if (!s.ticketCategories) s.ticketCategories = [];
   return s.ticketCategories;
 }
 const SUBJECT_BUTTON_ID = 'ticket_subject';
@@ -259,6 +256,13 @@ client.on('interactionCreate', async (interaction) => {
     if (cmd === 'panel-ticket') {
       if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({ content: "Permission refusée.", ephemeral: true });
       const categories = getTicketCategories(interaction.guild.id);
+      if (categories.length === 0) {
+        return interaction.reply({
+          embeds: [new EmbedBuilder().setColor(COLOR_DANGER).setTitle('❌ Système de tickets non configuré')
+            .setDescription("Aucune catégorie de ticket n'a été créée pour le moment.\n\nUtilise `/ticket-categorie-ajouter` pour créer ta première catégorie, puis relance `/panel-ticket`.")],
+          ephemeral: true,
+        });
+      }
       const embed = new EmbedBuilder().setColor(COLOR)
         .setAuthor({ name: interaction.guild.name, iconURL: interaction.guild.iconURL() || undefined })
         .setThumbnail(BOT_ICON())
@@ -267,12 +271,13 @@ client.on('interactionCreate', async (interaction) => {
         .addFields(categories.map(c => ({ name: `${c.emoji}  Tickets ${c.nom}`, value: c.desc })))
         .setFooter({ text: `${interaction.guild.name} • Support premium`, iconURL: BOT_ICON() })
         .setTimestamp();
+      const buttonStyles = [ButtonStyle.Primary, ButtonStyle.Success, ButtonStyle.Secondary, ButtonStyle.Danger];
       const rows = [];
       for (let i = 0; i < categories.length; i += 5) {
         const row = new ActionRowBuilder();
         categories.slice(i, i + 5).forEach((c, j) => {
           const idx = i + j;
-          row.addComponents(new ButtonBuilder().setCustomId(`ticket_open_btn:${idx}`).setLabel(c.nom).setEmoji(c.emoji).setStyle(ButtonStyle.Primary));
+          row.addComponents(new ButtonBuilder().setCustomId(`ticket_open_btn:${idx}`).setLabel(c.nom).setEmoji(c.emoji).setStyle(buttonStyles[idx % buttonStyles.length]));
         });
         rows.push(row);
       }
@@ -965,11 +970,12 @@ client.on('interactionCreate', async (interaction) => {
       { name: '📁  Casier & Notes', value: '`/casier` `/warn` `/warnings` `/unwarn` `/clearwarns` `/note` `/notes` `/deletenote`' },
       { name: '👮  Sanctions', value: '`/kick` `/ban` `/tempban` `/unban` `/softban` `/mute` `/unmute` `/timeout` `/untimeout`' },
       { name: '⚙️  Administration', value: '`/clear` `/lock` `/unlock` `/slowmode` `/nuke` `/embed` `/roleinfo` `/staffstats`' },
-      { name: '🤖  Centre de contrôle', value: '`/panel`' },
-      { name: '🎫  Support', value: '`/panel-ticket` `/close` `/recrutement` `/staff` `/signalement`' },
+      { name: '🤖  Centre de contrôle', value: '`/panel` `/config`' },
+      { name: '🎫  Support & Tickets', value: '`/panel-ticket` `/close` `/recrutement` `/staff` `/signalement` `/ticket-categorie-ajouter` `/ticket-categorie-supprimer` `/ticket-categorie-liste`' },
+      { name: '📜  Règlement', value: '`/panel-reglement` `/set-role-reglement`' },
       { name: '🎉  Utilitaires', value: '`/ping` `/avatar` `/userinfo` `/serverinfo` `/suggestion` `/annonce` `/sondage`' },
       { name: '🎮  Fun', value: '`/8ball` `/des` `/pileouface`' },
-      { name: '🔧  Configuration (staff)', value: '`/set-staffrole` `/set-ticketcategorie` `/set-rolecivil` `/set-welcome` `/set-logs` `/set-reglement` `/set-liens` `/set-urgence` `/set-horaire` `/set-suggestions`' },
+      { name: '🔧  Configuration (staff)', value: '`/config` `/set-staffrole` `/set-ticketcategorie` `/set-rolecivil` `/set-welcome` `/set-logs` `/set-reglement` `/set-liens` `/set-urgence` `/set-horaire` `/set-suggestions`' },
       { name: '📈  Niveaux', value: '`/niveau voir` `/niveau ajouter` `/niveau retirer` `/niveau set` `/niveau reset` `/niveau config` `/niveau recompense` `/classement`' },
     ).setFooter({ text: `${interaction.guild.name} • Bot premium`, iconURL: BOT_ICON() }).setTimestamp()] });
 
