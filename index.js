@@ -4,7 +4,7 @@ const path = require('path');
 const http = require('http');
 const {
   Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
-  StringSelectMenuBuilder, RoleSelectMenuBuilder, ChannelSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, PermissionsBitField,
+  StringSelectMenuBuilder, RoleSelectMenuBuilder, ChannelSelectMenuBuilder, UserSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, PermissionsBitField,
   ChannelType, AttachmentBuilder,
 } = require('discord.js');
 const config = require('./config.json');
@@ -426,19 +426,21 @@ client.on('interactionCreate', async (interaction) => {
 
       if (action === 'panel_members') {
         const embed = new EmbedBuilder().setColor(COLOR).setTitle('👥 ・ Gestion des membres')
+          .setDescription('Sélectionne un membre ci-dessous pour voir ses infos et agir sur lui (rôles, sanctions, casier).')
           .addFields(
             { name: 'Total membres', value: `${guild.memberCount}`, inline: true },
             { name: 'Bots', value: `${guild.members.cache.filter(m => m.user.bot).size}`, inline: true },
-          )
-          .setDescription("Utilise `/kick` `/ban` `/mute` `/warn` `/userinfo` `/casier` pour agir sur un membre précis.");
-        return interaction.reply({ embeds: [embed], ephemeral: true });
+          );
+        const userSelect = new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('panel_select_member').setPlaceholder('Choisir un membre'));
+        return interaction.reply({ embeds: [embed], components: [userSelect], ephemeral: true });
       }
 
       if (action === 'panel_tickets') {
         const cat = guild.channels.cache.get(s.ticketCategoryId);
-        const open = cat ? guild.channels.cache.filter(ch => ch.parentId === s.ticketCategoryId && ch.topic?.startsWith('ticket-owner:')) : null;
-        const embed = new EmbedBuilder().setColor(COLOR).setTitle('🎫 ・ Tickets ouverts');
-        if (!cat) embed.setDescription("Aucune catégorie de tickets configurée. Utilise `/set-ticketcategorie`.");
+        const open = cat ? guild.channels.cache.filter(ch => ch.parentId === s.ticketCategoryId) : null;
+        const embed = new EmbedBuilder().setColor(COLOR).setTitle('🎫 ・ Tickets ouverts')
+          .setFooter({ text: "Affiche tous les salons de la catégorie configurée, y compris ceux créés par d'autres bots si elle est partagée." });
+        if (!cat) embed.setDescription("Aucune catégorie de tickets configurée. Utilise `/set-ticketcategorie` ou `/config` → Tickets.");
         else if (open.size === 0) embed.setDescription('Aucun ticket ouvert actuellement.');
         else embed.setDescription(open.map(ch => `${ch}`).join('\n'));
         return interaction.reply({ embeds: [embed], ephemeral: true });
@@ -510,8 +512,92 @@ client.on('interactionCreate', async (interaction) => {
             { name: 'Salon bienvenue', value: s.welcomeChannelId ? `<#${s.welcomeChannelId}>` : 'Non défini', inline: true },
             { name: 'Rôle civil auto', value: s.civilianRoleId ? `<@&${s.civilianRoleId}>` : 'Non défini', inline: true },
           )
-          .setDescription("Utilise `/set-staffrole` `/set-ticketcategorie` `/set-rolecivil` `/set-welcome` `/set-logs` pour modifier.");
+          .setDescription("Utilise `/config` pour tout modifier facilement.");
         return interaction.reply({ embeds: [embed], ephemeral: true });
+      }
+    }
+
+    // ----- Gestion de membre depuis le Centre de contrôle -----
+    if (interaction.isUserSelectMenu() && interaction.customId === 'panel_select_member') {
+      const member = interaction.members.first();
+      const embed = new EmbedBuilder().setColor(COLOR).setThumbnail(member.user.displayAvatarURL())
+        .setTitle(`👤 ${member.user.username}`)
+        .addFields(
+          { name: 'A rejoint le', value: `<t:${Math.floor(member.joinedTimestamp / 1000)}:D>`, inline: true },
+          { name: 'Compte créé', value: `<t:${Math.floor(member.user.createdTimestamp / 1000)}:D>`, inline: true },
+          { name: 'Rôles', value: member.roles.cache.filter(r => r.id !== interaction.guild.id).map(r => `${r}`).join(', ') || 'Aucun' },
+        );
+      const actionRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`panel_maction:warn:${member.id}`).setLabel('Avertir').setEmoji('⚠️').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`panel_maction:kick:${member.id}`).setLabel('Expulser').setEmoji('👢').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId(`panel_maction:ban:${member.id}`).setLabel('Bannir').setEmoji('🔨').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId(`panel_maction:casier:${member.id}`).setLabel('Voir le casier').setEmoji('📁').setStyle(ButtonStyle.Secondary),
+      );
+      const roleSelect = new ActionRowBuilder().addComponents(
+        new RoleSelectMenuBuilder().setCustomId(`panel_member_roles:${member.id}`).setPlaceholder('Modifier les rôles de ce membre')
+          .setMinValues(0).setMaxValues(25)
+          .setDefaultRoles(member.roles.cache.filter(r => r.id !== interaction.guild.id).map(r => r.id))
+      );
+      return interaction.reply({ embeds: [embed], components: [actionRow, roleSelect], ephemeral: true });
+    }
+
+    if (interaction.isRoleSelectMenu() && interaction.customId.startsWith('panel_member_roles:')) {
+      const userId = interaction.customId.split(':')[1];
+      const member = await interaction.guild.members.fetch(userId).catch(() => null);
+      if (!member) return interaction.reply({ content: 'Membre introuvable.', ephemeral: true });
+      try {
+        await member.roles.set(interaction.values);
+        return interaction.reply({ content: `✅ Rôles de <@${userId}> mis à jour.`, ephemeral: true });
+      } catch (err) {
+        console.error('Erreur modification rôles panel:', err);
+        return interaction.reply({ content: "❌ Impossible de modifier certains rôles (rôle du bot trop bas, ou rôle géré automatiquement par Discord).", ephemeral: true });
+      }
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith('panel_maction:')) {
+      const [, actionType, userId] = interaction.customId.split(':');
+      if (actionType === 'casier') {
+        const rec = getRecord(key(interaction.guild.id, userId));
+        const embed = new EmbedBuilder().setColor(COLOR).setTitle(`📁 Casier — <@${userId}>`)
+          .addFields(
+            { name: 'Warns', value: `${countType(rec, 'warn')}`, inline: true },
+            { name: 'Mutes/Timeouts', value: `${countType(rec, 'mute') + countType(rec, 'timeout')}`, inline: true },
+            { name: 'Kicks', value: `${countType(rec, 'kick')}`, inline: true },
+            { name: 'Bans', value: `${countType(rec, 'ban') + countType(rec, 'tempban') + countType(rec, 'softban')}`, inline: true },
+          );
+        return interaction.reply({ embeds: [embed], ephemeral: true });
+      }
+      const modal = new ModalBuilder().setCustomId(`panel_maction_modal:${actionType}:${userId}`).setTitle(
+        actionType === 'warn' ? 'Avertir ce membre' : actionType === 'kick' ? 'Expulser ce membre' : 'Bannir ce membre'
+      );
+      modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('raison').setLabel('Raison').setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(500)));
+      return interaction.showModal(modal);
+    }
+
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('panel_maction_modal:')) {
+      const [, actionType, userId] = interaction.customId.split(':');
+      const raison = interaction.fields.getTextInputValue('raison');
+      const member = await interaction.guild.members.fetch(userId).catch(() => null);
+      if (!member) return interaction.reply({ content: 'Membre introuvable.', ephemeral: true });
+      if (actionType === 'warn') {
+        addSanction(key(interaction.guild.id, userId), 'warn', raison, interaction.user.tag);
+        await logModeration(interaction.guild, 'Avertissement', member.user, interaction.user, raison);
+        member.user.send(`⚠️ Averti sur **${interaction.guild.name}**. Raison : ${raison}`).catch(() => {});
+        return interaction.reply({ content: `⚠️ <@${userId}> a été averti.`, ephemeral: true });
+      }
+      if (actionType === 'kick') {
+        if (!member.kickable) return interaction.reply({ content: 'Impossible d\'expulser ce membre.', ephemeral: true });
+        await member.kick(raison);
+        addSanction(key(interaction.guild.id, userId), 'kick', raison, interaction.user.tag);
+        await logModeration(interaction.guild, 'Expulsion', member.user, interaction.user, raison);
+        return interaction.reply({ content: `👢 <@${userId}> a été expulsé.`, ephemeral: true });
+      }
+      if (actionType === 'ban') {
+        if (!member.bannable) return interaction.reply({ content: 'Impossible de bannir ce membre.', ephemeral: true });
+        await member.ban({ reason: raison });
+        addSanction(key(interaction.guild.id, userId), 'ban', raison, interaction.user.tag);
+        await logModeration(interaction.guild, 'Bannissement', member.user, interaction.user, raison);
+        return interaction.reply({ content: `🔨 <@${userId}> a été banni.`, ephemeral: true });
       }
     }
 
