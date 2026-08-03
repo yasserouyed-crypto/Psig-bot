@@ -267,21 +267,13 @@ client.on('interactionCreate', async (interaction) => {
         .setAuthor({ name: interaction.guild.name, iconURL: interaction.guild.iconURL() || undefined })
         .setThumbnail(BOT_ICON())
         .setTitle("🎫 ・ Centre d'Assistance & Recours")
-        .setDescription("Choisis la catégorie correspondant à ta demande en appuyant sur un bouton ci-dessous.\n*Un salon privé sera créé instantanément pour toi.*")
+        .setDescription("Choisis la catégorie correspondant à ta demande dans le menu ci-dessous.\n*Un salon privé sera créé instantanément pour toi.*")
         .addFields(categories.map(c => ({ name: `${c.emoji}  Tickets ${c.nom}`, value: c.desc })))
         .setFooter({ text: `${interaction.guild.name} • Support premium`, iconURL: BOT_ICON() })
         .setTimestamp();
-      const buttonStyles = [ButtonStyle.Primary, ButtonStyle.Success, ButtonStyle.Secondary, ButtonStyle.Danger];
-      const rows = [];
-      for (let i = 0; i < categories.length; i += 5) {
-        const row = new ActionRowBuilder();
-        categories.slice(i, i + 5).forEach((c, j) => {
-          const idx = i + j;
-          row.addComponents(new ButtonBuilder().setCustomId(`ticket_open_btn:${idx}`).setLabel(c.nom).setEmoji(c.emoji).setStyle(buttonStyles[idx % buttonStyles.length]));
-        });
-        rows.push(row);
-      }
-      await interaction.channel.send({ embeds: [embed], components: rows });
+      const select = new StringSelectMenuBuilder().setCustomId(PANEL_SELECT_ID).setPlaceholder("Choisissez le motif d'ouverture...")
+        .addOptions(categories.map((c, idx) => ({ label: `Tickets ${c.nom}`, description: "Ouvrir un ticket d'assistance", emoji: c.emoji, value: `${idx}` })));
+      await interaction.channel.send({ embeds: [embed], components: [new ActionRowBuilder().addComponents(select)] });
       return interaction.reply({ content: '✅ Panneau publié.', ephemeral: true });
     }
     if (cmd === 'ticket-categorie-ajouter') {
@@ -564,10 +556,10 @@ client.on('interactionCreate', async (interaction) => {
       if (!interaction.channel.topic?.startsWith('ticket-owner:')) return interaction.reply({ content: "Utilisable seulement dans un ticket.", ephemeral: true });
       return closeTicket(interaction);
     }
-    if (interaction.isButton() && interaction.customId.startsWith('ticket_open_btn:')) {
+    if (interaction.isStringSelectMenu() && interaction.customId === PANEL_SELECT_ID) {
       const existing = await findExistingTicket(interaction.guild, interaction.user.id);
       if (existing) return interaction.reply({ content: `Ticket déjà ouvert : <#${existing.id}>`, ephemeral: true });
-      const idx = parseInt(interaction.customId.split(':')[1], 10);
+      const idx = parseInt(interaction.values[0], 10);
       const categories = getTicketCategories(interaction.guild.id);
       const category = categories[idx]?.nom || 'Support';
       const modal = new ModalBuilder().setCustomId(`${MODAL_ID}:${encodeURIComponent(category)}`).setTitle(`Ticket — ${category}`);
