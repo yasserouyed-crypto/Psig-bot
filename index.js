@@ -247,6 +247,11 @@ client.on('interactionCreate', async (interaction) => {
       await client.guilds.fetch(interaction.guildId).catch(() => {});
     }
     if (!interaction.guild) {
+      // Deuxième tentative après un court délai, au cas où Discord n'a pas encore fini de synchroniser
+      await new Promise(r => setTimeout(r, 700));
+      await client.guilds.fetch(interaction.guildId).catch(() => {});
+    }
+    if (!interaction.guild) {
       if (interaction.isRepliable()) await interaction.reply({ content: "Le bot vient de redémarrer, réessaie dans quelques secondes.", ephemeral: true }).catch(() => {});
       return;
     }
