@@ -160,16 +160,25 @@ async function createTicketChannel(interaction, title, fields, description, cand
   const guild = interaction.guild;
   const s = getSettings(guild.id);
   const staffRole = guild.roles.cache.get(s.staffRoleId);
-  const channel = await guild.channels.create({
-    name: `ticket-${slugify(interaction.user.username)}`, type: ChannelType.GuildText,
-    parent: s.ticketCategoryId || null, topic: `ticket-owner:${interaction.user.id}`,
-    permissionOverwrites: [
-      { id: guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] },
-      { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory] },
-      { id: client.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.ManageChannels, PermissionsBitField.Flags.EmbedLinks, PermissionsBitField.Flags.AttachFiles] },
-      ...(staffRole ? [{ id: staffRole.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory] }] : []),
-    ],
-  });
+  let channel;
+  try {
+    channel = await guild.channels.create({
+      name: `ticket-${slugify(interaction.user.username)}`, type: ChannelType.GuildText,
+      parent: s.ticketCategoryId || null, topic: `ticket-owner:${interaction.user.id}`,
+      permissionOverwrites: [
+        { id: guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+        { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory] },
+        { id: client.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.ManageChannels, PermissionsBitField.Flags.EmbedLinks, PermissionsBitField.Flags.AttachFiles] },
+        ...(staffRole ? [{ id: staffRole.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory] }] : []),
+      ],
+    });
+  } catch (err) {
+    console.error('Erreur création ticket:', err);
+    if (err.code === 50013) {
+      throw new Error("Le bot n'a pas la permission \"Gérer les salons\" sur ce serveur (ou son rôle est trop bas dans la liste des rôles). Un membre du staff doit corriger ça dans Paramètres du serveur → Rôles.");
+    }
+    throw err;
+  }
   const embed = new EmbedBuilder().setColor(COLOR).setTitle(title)
     .setDescription(description || `Bonjour <@${interaction.user.id}>, notre équipe d'assistance a été notifiée et va prendre en charge votre demande dans les plus brefs délais.\n\nVous pouvez utiliser les boutons d'action ci-dessous pour administrer ce salon.`)
     .addFields(...fields).setTimestamp();
@@ -1232,7 +1241,9 @@ client.on('interactionCreate', async (interaction) => {
     if (cmd === 'pileouface') return interaction.reply({ content: `🪙 **${Math.random() < 0.5 ? 'Pile' : 'Face'}** !` });
   } catch (err) {
     console.error(err);
-    if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) interaction.reply({ content: "Erreur.", ephemeral: true }).catch(() => {});
+    const msg = err?.message && err.message.length < 300 ? err.message : "Une erreur est survenue.";
+    if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) interaction.reply({ content: `❌ ${msg}`, ephemeral: true }).catch(() => {});
+    else if (interaction.isRepliable() && interaction.deferred && !interaction.replied) interaction.editReply({ content: `❌ ${msg}` }).catch(() => {});
   }
 });
 
