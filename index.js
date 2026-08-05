@@ -40,6 +40,7 @@ const ENTREPRISES_PATH = path.join(DATA_DIR, 'entreprises.json');
 const RAPPORTS_PATH = path.join(DATA_DIR, 'rapports.json');
 const CNI_PATH = path.join(DATA_DIR, 'cni.json');
 const CANDIDATURES_PATH = path.join(DATA_DIR, 'candidatures.json');
+const BACKUPS_PATH = path.join(DATA_DIR, 'backups.json');
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 function loadJson(fp, fb) { try { return JSON.parse(fs.readFileSync(fp, 'utf8')); } catch { return fb; } }
@@ -76,6 +77,51 @@ let entreprises = loadJson(ENTREPRISES_PATH, []); // { nom, secteur, proprietair
 let rapports = loadJson(RAPPORTS_PATH, []); // { id, guildId, auteur, service, description, date }
 let cniData = loadJson(CNI_PATH, {}); // clé: `${guildId}:${userId}`
 let candidatures = loadJson(CANDIDATURES_PATH, []); // [{id, type, userId, channelId, guildId, statut, date}]
+let backups = loadJson(BACKUPS_PATH, {}); // backups[guildId] = { date, roles:[...], categories:[...], channels:[...] }
+
+function createServerBackup(guild) {
+  const roles = guild.roles.cache
+    .filter(r => r.id !== guild.id && !r.managed)
+    .sort((a, b) => b.position - a.position)
+    .map(r => ({ name: r.name, color: r.color, hoist: r.hoist, mentionable: r.mentionable, permissions: r.permissions.bitfield.toString(), position: r.position }));
+  const categories = guild.channels.cache
+    .filter(ch => ch.type === ChannelType.GuildCategory)
+    .map(ch => ({ name: ch.name, position: ch.position }));
+  const channels = guild.channels.cache
+    .filter(ch => ch.type === ChannelType.GuildText || ch.type === ChannelType.GuildVoice)
+    .map(ch => ({ name: ch.name, type: ch.type, parentName: ch.parent?.name || null, position: ch.position, topic: ch.topic || null }));
+  backups[guild.id] = { date: new Date().toLocaleString('fr-FR'), roles, categories, channels };
+  saveJson(BACKUPS_PATH, backups);
+  return backups[guild.id];
+}
+
+async function restoreServerBackup(guild) {
+  const backup = backups[guild.id];
+  if (!backup) return { rolesCreated: 0, categoriesCreated: 0, channelsCreated: 0, error: 'Aucune sauvegarde trouvée.' };
+  let rolesCreated = 0, categoriesCreated = 0, channelsCreated = 0;
+
+  for (const r of backup.roles) {
+    if (!guild.roles.cache.find(role => role.name === r.name)) {
+      await guild.roles.create({ name: r.name, color: r.color, hoist: r.hoist, mentionable: r.mentionable, permissions: BigInt(r.permissions) }).catch(() => {});
+      rolesCreated++;
+    }
+  }
+  for (const c of backup.categories) {
+    if (!guild.channels.cache.find(ch => ch.type === ChannelType.GuildCategory && ch.name === c.name)) {
+      await guild.channels.create({ name: c.name, type: ChannelType.GuildCategory }).catch(() => {});
+      categoriesCreated++;
+    }
+  }
+  for (const ch of backup.channels) {
+    const exists = guild.channels.cache.find(gc => gc.name === ch.name && gc.type === ch.type);
+    if (!exists) {
+      const parent = ch.parentName ? guild.channels.cache.find(gc => gc.type === ChannelType.GuildCategory && gc.name === ch.parentName) : null;
+      await guild.channels.create({ name: ch.name, type: ch.type, parent: parent?.id || null, topic: ch.topic || undefined }).catch(() => {});
+      channelsCreated++;
+    }
+  }
+  return { rolesCreated, categoriesCreated, channelsCreated };
+}
 
 function key(guildId, userId) { return `${guildId}:${userId}`; }
 
@@ -243,7 +289,18 @@ async function askAI(question) {
   }
 }
 
-client.once('ready', () => console.log(`Connecté en tant que ${client.user.tag}`));
+client.once('ready', () => {
+  console.log(`Connecté en tant que ${client.user.tag}`);
+  // Sauvegarde automatique de tous les serveurs toutes les 24h (protection anti-raid)
+  const autoBackup = () => {
+    client.guilds.cache.forEach(guild => {
+      try { createServerBackup(guild); } catch (err) { console.error('Erreur backup auto:', guild.id, err); }
+    });
+    console.log(`Sauvegarde automatique effectuée pour ${client.guilds.cache.size} serveur(s).`);
+  };
+  setTimeout(autoBackup, 60 * 1000); // première sauvegarde 1 min après le démarrage
+  setInterval(autoBackup, 24 * 60 * 60 * 1000);
+});
 
 client.on('interactionCreate', async (interaction) => {
   try {
@@ -316,6 +373,31 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.reply({ embeds: [new EmbedBuilder().setColor(COLOR).setTitle('🎫 Catégories de tickets').setDescription(categories.map(c => `${c.emoji} **${c.nom}** — ${c.desc}`).join('\n\n'))], ephemeral: true });
     }
     // ===== CONFIGURATION (façon DraftBot) =====
+    // ===== SAUVEGARDE DU SERVEUR (anti-raid) =====
+    if (cmd === 'backup-creer') {
+      if (!interaction.memberPermissions.has(PermissionsBitField.Flags.Administrator)) return interaction.reply({ content: "Permission refusée (Administrateur requis).", ephemeral: true });
+      await interaction.deferReply({ ephemeral: true });
+      const backup = createServerBackup(interaction.guild);
+      return interaction.editReply({ content: `✅ Sauvegarde créée : ${backup.roles.length} rôle(s), ${backup.categories.length} catégorie(s), ${backup.channels.length} salon(s).` });
+    }
+    if (cmd === 'backup-restaurer') {
+      if (!interaction.memberPermissions.has(PermissionsBitField.Flags.Administrator)) return interaction.reply({ content: "Permission refusée (Administrateur requis).", ephemeral: true });
+      await interaction.deferReply({ ephemeral: true });
+      const result = await restoreServerBackup(interaction.guild);
+      if (result.error) return interaction.editReply({ content: `❌ ${result.error}` });
+      return interaction.editReply({ content: `✅ Restauration terminée : ${result.rolesCreated} rôle(s), ${result.categoriesCreated} catégorie(s) et ${result.channelsCreated} salon(s) recréés (seuls les éléments manquants ont été recréés, rien n'a été dupliqué).` });
+    }
+    if (cmd === 'backup-info') {
+      const backup = backups[interaction.guild.id];
+      if (!backup) return interaction.reply({ content: "Aucune sauvegarde n'existe pour ce serveur. Utilise `/backup-creer`.", ephemeral: true });
+      return interaction.reply({ embeds: [new EmbedBuilder().setColor(COLOR).setTitle('💾 Dernière sauvegarde').addFields(
+        { name: 'Date', value: backup.date, inline: true },
+        { name: 'Rôles', value: `${backup.roles.length}`, inline: true },
+        { name: 'Catégories', value: `${backup.categories.length}`, inline: true },
+        { name: 'Salons', value: `${backup.channels.length}`, inline: true },
+      )], ephemeral: true });
+    }
+
     if (cmd === 'config') {
       if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({ content: "Permission refusée.", ephemeral: true });
       const embed = new EmbedBuilder().setColor(COLOR).setThumbnail(BOT_ICON())
