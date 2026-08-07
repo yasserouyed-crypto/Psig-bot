@@ -169,6 +169,8 @@ async function checkLevelRewards(guild, member, level) {
 
 const spamTracker = new Map();
 const activePolls = new Map(); // pollId -> { question, options, votes: { userId: optionIndex } }
+const afkUsers = new Map(); // `${guildId}:${userId}` -> raison
+const giveaways = new Map(); // giveawayId -> { messageId, channelId, guildId, prix, gagnants, participants: Set }
 const SPAM_WINDOW_MS = 5000, SPAM_LIMIT = 5;
 const xpCooldown = new Map();
 const INVITE_REGEX = /(discord\.gg|discord(?:app)?\.com\/invite)\/\S+/i;
@@ -1327,6 +1329,100 @@ client.on('interactionCreate', async (interaction) => {
     if (cmd === '8ball') { const r = ['Oui, certainement.', 'Non, aucune chance.', 'Peut-être...', 'Demande plus tard.', "C'est certain !", 'Incertain.']; return interaction.reply({ content: `🎱 ${r[Math.floor(Math.random() * r.length)]}` }); }
     if (cmd === 'des') { const faces = interaction.options.getInteger('faces') || 6; return interaction.reply({ content: `🎲 **${Math.floor(Math.random() * faces) + 1}** (sur ${faces})` }); }
     if (cmd === 'pileouface') return interaction.reply({ content: `🪙 **${Math.random() < 0.5 ? 'Pile' : 'Face'}** !` });
+
+    // ===== NOUVELLES COMMANDES UTILES =====
+    if (cmd === 'membercount') {
+      const g = interaction.guild;
+      const bots = g.members.cache.filter(m => m.user.bot).size;
+      return interaction.reply({ embeds: [new EmbedBuilder().setColor(COLOR).setTitle(`👥 Membres — ${g.name}`)
+        .addFields({ name: 'Total', value: `${g.memberCount}`, inline: true }, { name: 'Humains', value: `${g.memberCount - bots}`, inline: true }, { name: 'Bots', value: `${bots}`, inline: true })] });
+    }
+
+    if (cmd === 'choose') {
+      const options = interaction.options.getString('options').split(',').map(o => o.trim()).filter(Boolean);
+      if (options.length < 2) return interaction.reply({ content: 'Donne au moins 2 options séparées par des virgules.', ephemeral: true });
+      return interaction.reply({ content: `🎯 Je choisis : **${options[Math.floor(Math.random() * options.length)]}**` });
+    }
+
+    if (cmd === 'say') {
+      if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({ content: "Permission refusée.", ephemeral: true });
+      const message = interaction.options.getString('message');
+      const salon = interaction.options.getChannel('salon') || interaction.channel;
+      await salon.send(message);
+      return interaction.reply({ content: `✅ Message envoyé dans <#${salon.id}>.`, ephemeral: true });
+    }
+
+    if (cmd === 'nickname') {
+      if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ManageNicknames)) return interaction.reply({ content: "Permission refusée.", ephemeral: true });
+      const target = interaction.options.getMember('membre');
+      const pseudo = interaction.options.getString('pseudo');
+      if (!target.manageable) return interaction.reply({ content: "Impossible de modifier le pseudo de ce membre.", ephemeral: true });
+      await target.setNickname(pseudo || null);
+      return interaction.reply({ content: pseudo ? `✅ Pseudo de <@${target.id}> changé en **${pseudo}**.` : `✅ Pseudo de <@${target.id}> réinitialisé.` });
+    }
+
+    if (cmd === 'purge-user') {
+      if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ManageMessages)) return interaction.reply({ content: "Permission refusée.", ephemeral: true });
+      const target = interaction.options.getUser('membre');
+      const nombre = interaction.options.getInteger('nombre') || 50;
+      const messages = await interaction.channel.messages.fetch({ limit: 100 });
+      const toDelete = messages.filter(m => m.author.id === target.id).first(nombre);
+      const deleted = await interaction.channel.bulkDelete(toDelete, true).catch(() => null);
+      return interaction.reply({ content: `🧹 ${deleted ? deleted.size : 0} message(s) de <@${target.id}> supprimé(s).`, ephemeral: true });
+    }
+
+    if (cmd === 'afk') {
+      const raison = interaction.options.getString('raison') || 'Absent';
+      afkUsers.set(key(interaction.guild.id, interaction.user.id), raison);
+      return interaction.reply({ content: `😴 Tu es maintenant AFK : ${raison}` });
+    }
+
+    if (cmd === 'remind') {
+      const minutes = interaction.options.getInteger('minutes');
+      const message = interaction.options.getString('message');
+      await interaction.reply({ content: `⏰ Rappel programmé dans ${minutes} minute(s).`, ephemeral: true });
+      setTimeout(() => {
+        interaction.user.send(`⏰ Rappel : ${message}`).catch(() => {
+          interaction.channel.send(`⏰ <@${interaction.user.id}>, rappel : ${message}`).catch(() => {});
+        });
+      }, minutes * 60 * 1000);
+      return;
+    }
+
+    if (cmd === 'giveaway') {
+      if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({ content: "Permission refusée.", ephemeral: true });
+      const prix = interaction.options.getString('prix');
+      const minutes = interaction.options.getInteger('minutes');
+      const gagnants = interaction.options.getInteger('gagnants') || 1;
+      const giveawayId = genId();
+      const embed = new EmbedBuilder().setColor(COLOR).setTitle(`🎉 GIVEAWAY : ${prix}`)
+        .setDescription(`Appuie sur le bouton pour participer !\n**Gagnant(s) :** ${gagnants}\n**Fin :** <t:${Math.floor((Date.now() + minutes * 60000) / 1000)}:R>`)
+        .setFooter({ text: `Organisé par ${interaction.user.username}` });
+      const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`giveaway_join:${giveawayId}`).setLabel('Participer').setEmoji('🎉').setStyle(ButtonStyle.Success));
+      await interaction.reply({ embeds: [embed], components: [row] });
+      const msg = await interaction.fetchReply();
+      giveaways.set(giveawayId, { messageId: msg.id, channelId: interaction.channel.id, guildId: interaction.guild.id, prix, gagnants, participants: new Set() });
+      setTimeout(async () => {
+        const g = giveaways.get(giveawayId);
+        if (!g) return;
+        const winners = [...g.participants].sort(() => 0.5 - Math.random()).slice(0, g.gagnants);
+        const channel = interaction.guild.channels.cache.get(g.channelId);
+        if (channel) {
+          await channel.send({
+            content: winners.length > 0 ? `🎉 Félicitations ${winners.map(id => `<@${id}>`).join(', ')} ! Tu remportes **${g.prix}** !` : `😢 Personne n'a participé au giveaway **${g.prix}**.`,
+          }).catch(() => {});
+        }
+        giveaways.delete(giveawayId);
+      }, minutes * 60 * 1000);
+      return;
+    }
+    if (interaction.isButton() && interaction.customId.startsWith('giveaway_join:')) {
+      const giveawayId = interaction.customId.split(':')[1];
+      const g = giveaways.get(giveawayId);
+      if (!g) return interaction.reply({ content: 'Ce giveaway est terminé.', ephemeral: true });
+      g.participants.add(interaction.user.id);
+      return interaction.reply({ content: `✅ Tu participes au giveaway **${g.prix}** !`, ephemeral: true });
+    }
   } catch (err) {
     console.error(err);
     const msg = err?.message && err.message.length < 300 ? err.message : "Une erreur est survenue.";
@@ -1397,6 +1493,21 @@ client.on('voiceStateUpdate', async (oldS, newS) => {
 // ---------- AutoMod + Anti-spam + XP ----------
 client.on('messageCreate', async (message) => {
   if (message.author.bot || !message.guild) return;
+
+  // AFK : retire le statut si l'utilisateur reparle, prévient si on mentionne un AFK
+  const afkKey = key(message.guild.id, message.author.id);
+  if (afkUsers.has(afkKey)) {
+    afkUsers.delete(afkKey);
+    message.reply('👋 Bon retour, ton statut AFK a été retiré.').then(m => setTimeout(() => m.delete().catch(() => {}), 5000)).catch(() => {});
+  }
+  if (message.mentions.users.size > 0) {
+    for (const [, user] of message.mentions.users) {
+      const mentionedKey = key(message.guild.id, user.id);
+      if (afkUsers.has(mentionedKey)) {
+        message.channel.send(`😴 <@${user.id}> est AFK : ${afkUsers.get(mentionedKey)}`).catch(() => {});
+      }
+    }
+  }
 
   // IA : répond quand le bot est mentionné directement
   if (message.mentions.has(client.user.id) && !message.mentions.everyone) {

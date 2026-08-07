@@ -150,6 +150,29 @@ const commands = [
   new SlashCommandBuilder().setName('8ball').setDescription('Pose une question à la boule magique'),
   new SlashCommandBuilder().setName('des').setDescription('Lance un dé').addIntegerOption(o => o.setName('faces').setDescription('Nombre de faces (défaut 6)').setRequired(false)),
   new SlashCommandBuilder().setName('pileouface').setDescription('Pile ou face'),
+
+  // ----- Nouvelles commandes utiles -----
+  new SlashCommandBuilder().setName('membercount').setDescription('Affiche le nombre de membres du serveur'),
+  new SlashCommandBuilder().setName('choose').setDescription('Choisit aléatoirement parmi une liste')
+    .addStringOption(o => o.setName('options').setDescription('Options séparées par des virgules').setRequired(true)),
+  new SlashCommandBuilder().setName('say').setDescription('Fait envoyer un message au bot').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addStringOption(o => o.setName('message').setDescription('Le message à envoyer').setRequired(true))
+    .addChannelOption(o => o.setName('salon').setDescription('Salon (par défaut : ce salon)').setRequired(false)),
+  new SlashCommandBuilder().setName('nickname').setDescription("Change le pseudo d'un membre").setDefaultMemberPermissions(PermissionFlagsBits.ManageNicknames)
+    .addUserOption(o => o.setName('membre').setDescription('Membre').setRequired(true))
+    .addStringOption(o => o.setName('pseudo').setDescription('Nouveau pseudo (vide pour réinitialiser)').setRequired(false)),
+  new SlashCommandBuilder().setName('purge-user').setDescription("Supprime les derniers messages d'un membre").setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
+    .addUserOption(o => o.setName('membre').setDescription('Membre').setRequired(true))
+    .addIntegerOption(o => o.setName('nombre').setDescription('Nombre max de messages (défaut 50)').setRequired(false)),
+  new SlashCommandBuilder().setName('afk').setDescription('Indique que tu es absent')
+    .addStringOption(o => o.setName('raison').setDescription("Raison de l'absence").setRequired(false)),
+  new SlashCommandBuilder().setName('remind').setDescription('Programme un rappel privé')
+    .addIntegerOption(o => o.setName('minutes').setDescription('Dans combien de minutes').setRequired(true))
+    .addStringOption(o => o.setName('message').setDescription('Le rappel').setRequired(true)),
+  new SlashCommandBuilder().setName('giveaway').setDescription('Lance un giveaway').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addStringOption(o => o.setName('prix').setDescription('Ce qui est à gagner').setRequired(true))
+    .addIntegerOption(o => o.setName('minutes').setDescription('Durée en minutes').setRequired(true))
+    .addIntegerOption(o => o.setName('gagnants').setDescription('Nombre de gagnants (défaut 1)').setRequired(false)),
 ].map(cmd => cmd.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
