@@ -1088,7 +1088,13 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     // ===== CONFIG =====
-    if (cmd === 'set-welcome') { const s = getSettings(interaction.guild.id); s.welcomeChannelId = interaction.options.getChannel('salon').id; saveSettings(); return interaction.reply({ content: '✅ Salon de bienvenue défini.', ephemeral: true }); }
+    if (cmd === 'set-welcome') {
+      const s = getSettings(interaction.guild.id);
+      const salon = interaction.options.getChannel('salon');
+      s.welcomeChannelId = salon ? salon.id : null;
+      saveSettings();
+      return interaction.reply({ content: salon ? '✅ Salon de bienvenue défini.' : '✅ Message de bienvenue désactivé.', ephemeral: true });
+    }
     if (cmd === 'set-reglement') { const s = getSettings(interaction.guild.id); s.reglementText = interaction.options.getString('texte'); saveSettings(); return interaction.reply({ content: '✅ Règlement mis à jour.', ephemeral: true }); }
     if (cmd === 'set-liens') { const s = getSettings(interaction.guild.id); s.liensText = interaction.options.getString('texte'); saveSettings(); return interaction.reply({ content: '✅ Liens mis à jour.', ephemeral: true }); }
     if (cmd === 'set-urgence') { const s = getSettings(interaction.guild.id); s.urgenceText = interaction.options.getString('texte'); saveSettings(); return interaction.reply({ content: '✅ Urgences mises à jour.', ephemeral: true }); }

@@ -79,8 +79,8 @@ const commands = [
     .addRoleOption(o => o.setName('role').setDescription('Le rôle').setRequired(true)),
 
   // ----- Configuration -----
-  new SlashCommandBuilder().setName('set-welcome').setDescription('Définit le salon de bienvenue').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-    .addChannelOption(o => o.setName('salon').setDescription('Salon').setRequired(true)),
+  new SlashCommandBuilder().setName('set-welcome').setDescription('Définit ou désactive le salon de bienvenue').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addChannelOption(o => o.setName('salon').setDescription('Salon (laisse vide pour désactiver)').setRequired(false)),
   new SlashCommandBuilder().setName('set-reglement').setDescription('Définit le règlement').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addStringOption(o => o.setName('texte').setDescription('Texte du règlement').setRequired(true)),
   new SlashCommandBuilder().setName('set-liens').setDescription('Définit les liens utiles').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
