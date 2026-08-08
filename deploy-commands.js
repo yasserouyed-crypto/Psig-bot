@@ -13,9 +13,32 @@ const commands = [
   new SlashCommandBuilder().setName('ticket-categorie-liste').setDescription('Liste les catégories de tickets actuelles'),
   new SlashCommandBuilder().setName('panel').setDescription("Ouvre le centre de contrôle de l'administration").setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
   new SlashCommandBuilder().setName('config').setDescription('Menu de configuration du bot (tickets, bienvenue, niveaux, logs...)').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
-  new SlashCommandBuilder().setName('backup-creer').setDescription('Sauvegarde la structure actuelle du serveur (rôles, catégories, salons)').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-  new SlashCommandBuilder().setName('backup-restaurer').setDescription('Recrée les rôles/catégories/salons manquants depuis la dernière sauvegarde').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-  new SlashCommandBuilder().setName('backup-info').setDescription('Affiche les infos de la dernière sauvegarde'),
+  new SlashCommandBuilder().setName('backup').setDescription('Sauvegarde et restauration du serveur').setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addSubcommand(s => s.setName('create').setDescription('Crée une nouvelle sauvegarde (rôles, catégories, salons)'))
+    .addSubcommand(s => s.setName('list').setDescription('Liste les sauvegardes disponibles'))
+    .addSubcommand(s => s.setName('restore').setDescription('Restaure une sauvegarde (avec confirmation)').addStringOption(o => o.setName('id').setDescription('ID de la sauvegarde (vide = la plus récente)').setRequired(false))),
+
+  new SlashCommandBuilder().setName('antiraid').setDescription('Système anti-raid').setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addSubcommand(s => s.setName('setup').setDescription("Configure le salon d'alertes").addChannelOption(o => o.setName('salon_alertes').setDescription('Salon des alertes').setRequired(true)))
+    .addSubcommand(s => s.setName('on').setDescription("Active l'anti-raid"))
+    .addSubcommand(s => s.setName('off').setDescription("Désactive l'anti-raid"))
+    .addSubcommand(s => s.setName('status').setDescription('Affiche le statut actuel'))
+    .addSubcommand(s => s.setName('config').setDescription('Affiche la configuration des seuils'))
+    .addSubcommand(s => s.setName('lockdown').setDescription('Verrouille manuellement le serveur'))
+    .addSubcommand(s => s.setName('unlock').setDescription('Lève le verrouillage manuel'))
+    .addSubcommand(s => s.setName('test').setDescription('Teste le calcul de score sans impact réel')),
+
+  new SlashCommandBuilder().setName('antinuke').setDescription('Système anti-nuke').setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addSubcommand(s => s.setName('on').setDescription("Active l'anti-nuke"))
+    .addSubcommand(s => s.setName('off').setDescription("Désactive l'anti-nuke"))
+    .addSubcommand(s => s.setName('status').setDescription('Affiche le statut actuel'))
+    .addSubcommand(s => s.setName('protect-role').setDescription('Protège un rôle').addRoleOption(o => o.setName('role').setDescription('Rôle à protéger').setRequired(true)))
+    .addSubcommand(s => s.setName('unprotect-role').setDescription('Retire la protection d\'un rôle').addRoleOption(o => o.setName('role').setDescription('Rôle').setRequired(true)))
+    .addSubcommand(s => s.setName('protect-user').setDescription('Protège un utilisateur (jamais sanctionné)').addUserOption(o => o.setName('membre').setDescription('Membre à protéger').setRequired(true)))
+    .addSubcommand(s => s.setName('unprotect-user').setDescription('Retire la protection d\'un utilisateur').addUserOption(o => o.setName('membre').setDescription('Membre').setRequired(true))),
+
+  new SlashCommandBuilder().setName('security').setDescription('Sécurité du serveur')
+    .addSubcommand(s => s.setName('status').setDescription('Tableau de bord sécurité complet')),
   new SlashCommandBuilder().setName('close').setDescription('Ferme le ticket en cours'),
   new SlashCommandBuilder().setName('recrutement').setDescription('Candidature de recrutement'),
   new SlashCommandBuilder().setName('staff').setDescription("Candidature pour l'équipe staff"),

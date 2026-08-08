@@ -59,12 +59,16 @@ const DEFAULT_SETTINGS = {
   levelUpChannelId: null,
   reglementRoleId: null,
   ticketCategories: [],
+  antiraid: { enabled: false, alertChannelId: null, lockdownChannels: [] },
+  antinuke: { enabled: true, protectedRoles: [], protectedUsers: [] },
 };
 // settingsAll[guildId] = { ...DEFAULT_SETTINGS }  -> réglages propres à CHAQUE serveur
 let settingsAll = loadJson(SETTINGS_PATH, {});
 function getSettings(guildId) {
   if (!settingsAll[guildId]) settingsAll[guildId] = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
   settingsAll[guildId].automod = { ...DEFAULT_SETTINGS.automod, ...(settingsAll[guildId].automod || {}) };
+  settingsAll[guildId].antiraid = { ...DEFAULT_SETTINGS.antiraid, ...(settingsAll[guildId].antiraid || {}) };
+  settingsAll[guildId].antinuke = { ...DEFAULT_SETTINGS.antinuke, ...(settingsAll[guildId].antinuke || {}) };
   return settingsAll[guildId];
 }
 function saveSettings() { saveJson(SETTINGS_PATH, settingsAll); }
@@ -77,7 +81,7 @@ let entreprises = loadJson(ENTREPRISES_PATH, []); // { nom, secteur, proprietair
 let rapports = loadJson(RAPPORTS_PATH, []); // { id, guildId, auteur, service, description, date }
 let cniData = loadJson(CNI_PATH, {}); // clé: `${guildId}:${userId}`
 let candidatures = loadJson(CANDIDATURES_PATH, []); // [{id, type, userId, channelId, guildId, statut, date}]
-let backups = loadJson(BACKUPS_PATH, {}); // backups[guildId] = { date, roles:[...], categories:[...], channels:[...] }
+let backups = loadJson(BACKUPS_PATH, {}); // backups[guildId] = [ { id, date, roles, categories, channels }, ... ] (5 dernières)
 
 function createServerBackup(guild) {
   const roles = guild.roles.cache
@@ -90,13 +94,17 @@ function createServerBackup(guild) {
   const channels = guild.channels.cache
     .filter(ch => ch.type === ChannelType.GuildText || ch.type === ChannelType.GuildVoice)
     .map(ch => ({ name: ch.name, type: ch.type, parentName: ch.parent?.name || null, position: ch.position, topic: ch.topic || null }));
-  backups[guild.id] = { date: new Date().toLocaleString('fr-FR'), roles, categories, channels };
+  const snapshot = { id: genId(), date: new Date().toLocaleString('fr-FR'), roles, categories, channels };
+  if (!backups[guild.id]) backups[guild.id] = [];
+  backups[guild.id].unshift(snapshot);
+  backups[guild.id] = backups[guild.id].slice(0, 5);
   saveJson(BACKUPS_PATH, backups);
-  return backups[guild.id];
+  return snapshot;
 }
 
-async function restoreServerBackup(guild) {
-  const backup = backups[guild.id];
+async function restoreServerBackup(guild, snapshotId) {
+  const list = backups[guild.id] || [];
+  const backup = snapshotId ? list.find(b => b.id === snapshotId) : list[0];
   if (!backup) return { rolesCreated: 0, categoriesCreated: 0, channelsCreated: 0, error: 'Aucune sauvegarde trouvée.' };
   let rolesCreated = 0, categoriesCreated = 0, channelsCreated = 0;
 
@@ -171,6 +179,134 @@ const spamTracker = new Map();
 const activePolls = new Map(); // pollId -> { question, options, votes: { userId: optionIndex } }
 const afkUsers = new Map(); // `${guildId}:${userId}` -> raison
 const giveaways = new Map(); // giveawayId -> { messageId, channelId, guildId, prix, gagnants, participants: Set }
+
+// ========== SÉCURITÉ : AntiRaid + AntiNuke ==========
+const raidState = new Map(); // guildId -> { level, score, joinTimestamps: [], lockdown: false, incidents: [] }
+const nukeTracker = new Map(); // guildId -> Map(executorId -> { type: [timestamps] })
+const securityIncidents = new Map(); // guildId -> [ {date, type, detail} ] (10 derniers)
+
+function getRaidState(guildId) {
+  if (!raidState.has(guildId)) raidState.set(guildId, { level: 'NORMAL', score: 0, joinTimestamps: [], lockdown: false });
+  return raidState.get(guildId);
+}
+function addIncident(guildId, type, detail) {
+  if (!securityIncidents.has(guildId)) securityIncidents.set(guildId, []);
+  const arr = securityIncidents.get(guildId);
+  arr.unshift({ date: new Date().toLocaleString('fr-FR'), type, detail });
+  securityIncidents.set(guildId, arr.slice(0, 10));
+}
+
+async function securityLog(guild, titre, champs, couleur = COLOR_DANGER) {
+  const s = getSettings(guild.id);
+  const channelId = s.antiraid.alertChannelId || s.logsChannelId;
+  const channel = channelId ? guild.channels.cache.get(channelId) : null;
+  const embed = new EmbedBuilder().setColor(couleur).setTitle(titre).addFields(champs).setTimestamp();
+  if (channel) await channel.send({ embeds: [embed] }).catch(() => {});
+}
+
+// ---- AntiRaid : score de risque sur plusieurs fenêtres ----
+const RAID_WINDOWS = [
+  { ms: 5000, seuil: 4 },
+  { ms: 10000, seuil: 6 },
+  { ms: 30000, seuil: 10 },
+  { ms: 60000, seuil: 15 },
+  { ms: 300000, seuil: 30 },
+];
+
+function computeRiskScore(guildId, newAccountRatio) {
+  const state = getRaidState(guildId);
+  const now = Date.now();
+  state.joinTimestamps = state.joinTimestamps.filter(t => now - t < 300000);
+  let score = 0;
+  for (const w of RAID_WINDOWS) {
+    const count = state.joinTimestamps.filter(t => now - t < w.ms).length;
+    score += Math.min(25, Math.round((count / w.seuil) * 25));
+  }
+  score = Math.min(80, score) + Math.round(newAccountRatio * 20); // comptes récents pèsent jusqu'à 20 points
+  score = Math.min(100, score);
+  let level = 'NORMAL';
+  if (score >= 70) level = 'RAID';
+  else if (score >= 40) level = 'ALERTE';
+  else if (score >= 20) level = 'SURVEILLANCE';
+  state.score = score;
+  state.level = level;
+  return { score, level };
+}
+
+async function triggerLockdown(guild, raison) {
+  const s = getSettings(guild.id);
+  const state = getRaidState(guild.id);
+  if (state.lockdown) return;
+  state.lockdown = true;
+  const channelIds = s.antiraid.lockdownChannels.length > 0 ? s.antiraid.lockdownChannels : guild.channels.cache.filter(ch => ch.type === ChannelType.GuildText).map(ch => ch.id);
+  for (const id of channelIds) {
+    const ch = guild.channels.cache.get(id);
+    if (ch) await ch.permissionOverwrites.edit(guild.roles.everyone, { SendMessages: false }).catch(() => {});
+  }
+  addIncident(guild.id, 'LOCKDOWN', raison);
+  await securityLog(guild, '🔒 LOCKDOWN ACTIVÉ', [{ name: 'Raison', value: raison }, { name: 'Salons verrouillés', value: `${channelIds.length}` }]);
+}
+async function liftLockdown(guild) {
+  const s = getSettings(guild.id);
+  const state = getRaidState(guild.id);
+  state.lockdown = false;
+  const channelIds = s.antiraid.lockdownChannels.length > 0  ? s.antiraid.lockdownChannels : guild.channels.cache.filter(ch => ch.type === ChannelType.GuildText).map(ch => ch.id);
+  for (const id of channelIds) {
+    const ch = guild.channels.cache.get(id);
+    if (ch) await ch.permissionOverwrites.edit(guild.roles.everyone, { SendMessages: null }).catch(() => {});
+  }
+  addIncident(guild.id, 'UNLOCK', 'Levée manuelle ou automatique du lockdown');
+  await securityLog(guild, '🔓 Lockdown levé', [{ name: 'Salons', value: `${channelIds.length}` }], COLOR_SUCCESS);
+}
+
+// ---- AntiNuke : suit les actions destructrices par exécutant via les Audit Logs ----
+const NUKE_THRESHOLDS = { channelDelete: 3, channelCreate: 5, roleDelete: 3, roleCreate: 5 };
+const NUKE_WINDOW_MS = 60000;
+
+async function findAuditExecutor(guild, actionType, targetId) {
+  try {
+    const logs = await guild.fetchAuditLogs({ type: actionType, limit: 3 });
+    const entry = logs.entries.find(e => !targetId || e.target?.id === targetId || e.targetId === targetId) || logs.entries.first();
+    if (entry && Date.now() - entry.createdTimestamp < 15000) return entry.executor;
+  } catch (err) { console.error('Erreur audit logs:', err); }
+  return null;
+}
+
+async function trackNukeAction(guild, actionType, executor) {
+  if (!executor || executor.bot) return;
+  const s = getSettings(guild.id);
+  if (!s.antinuke.enabled) return;
+  if (s.antinuke.protectedUsers.includes(executor.id)) return; // ne jamais sanctionner un utilisateur protégé (ex: propriétaire)
+
+  if (!nukeTracker.has(guild.id)) nukeTracker.set(guild.id, new Map());
+  const guildTracker = nukeTracker.get(guild.id);
+  if (!guildTracker.has(executor.id)) guildTracker.set(executor.id, {});
+  const userActions = guildTracker.get(executor.id);
+  if (!userActions[actionType]) userActions[actionType] = [];
+  const now = Date.now();
+  userActions[actionType] = userActions[actionType].filter(t => now - t < NUKE_WINDOW_MS);
+  userActions[actionType].push(now);
+
+  const seuil = NUKE_THRESHOLDS[actionType] || 5;
+  if (userActions[actionType].length >= seuil) {
+    userActions[actionType] = []; // reset pour éviter de spammer l'action
+    const member = await guild.members.fetch(executor.id).catch(() => null);
+    let action = 'Aucune (permissions insuffisantes pour agir)';
+    if (member && member.manageable) {
+      const dangerousPerms = [PermissionsBitField.Flags.Administrator, PermissionsBitField.Flags.ManageGuild, PermissionsBitField.Flags.ManageRoles, PermissionsBitField.Flags.ManageChannels];
+      const rolesToRemove = member.roles.cache.filter(r => dangerousPerms.some(p => r.permissions.has(p)) && r.id !== guild.id);
+      for (const [, role] of rolesToRemove) await member.roles.remove(role).catch(() => {});
+      action = `${rolesToRemove.size} rôle(s) dangereux retiré(s)`;
+    }
+    addIncident(guild.id, 'ANTI-NUKE', `${executor.tag} — ${actionType} x${seuil}+ — ${action}`);
+    await securityLog(guild, '🚨 ANTI-NUKE — Action suspecte bloquée', [
+      { name: 'Responsable', value: `<@${executor.id}> (${executor.tag})`, inline: true },
+      { name: 'Action détectée', value: actionType, inline: true },
+      { name: 'Seuil dépassé', value: `${seuil}+ en ${NUKE_WINDOW_MS / 1000}s`, inline: true },
+      { name: 'Réaction du bot', value: action },
+    ]);
+  }
+}
 const SPAM_WINDOW_MS = 5000, SPAM_LIMIT = 5;
 const xpCooldown = new Map();
 const INVITE_REGEX = /(discord\.gg|discord(?:app)?\.com\/invite)\/\S+/i;
@@ -375,29 +511,126 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.reply({ embeds: [new EmbedBuilder().setColor(COLOR).setTitle('🎫 Catégories de tickets').setDescription(categories.map(c => `${c.emoji} **${c.nom}** — ${c.desc}`).join('\n\n'))], ephemeral: true });
     }
     // ===== CONFIGURATION (façon DraftBot) =====
-    // ===== SAUVEGARDE DU SERVEUR (anti-raid) =====
-    if (cmd === 'backup-creer') {
+    // ===== SAUVEGARDE DU SERVEUR (/backup) =====
+    // ===== SÉCURITÉ : ANTIRAID =====
+    if (cmd === 'antiraid') {
       if (!interaction.memberPermissions.has(PermissionsBitField.Flags.Administrator)) return interaction.reply({ content: "Permission refusée (Administrateur requis).", ephemeral: true });
-      await interaction.deferReply({ ephemeral: true });
-      const backup = createServerBackup(interaction.guild);
-      return interaction.editReply({ content: `✅ Sauvegarde créée : ${backup.roles.length} rôle(s), ${backup.categories.length} catégorie(s), ${backup.channels.length} salon(s).` });
+      const sub = interaction.options.getSubcommand();
+      const s = getSettings(interaction.guild.id);
+      const state = getRaidState(interaction.guild.id);
+
+      if (sub === 'setup') {
+        const salon = interaction.options.getChannel('salon_alertes');
+        s.antiraid.alertChannelId = salon.id;
+        saveSettings();
+        return interaction.reply({ content: `✅ AntiRaid configuré. Alertes envoyées dans <#${salon.id}>. Active-le avec \`/antiraid on\`.`, ephemeral: true });
+      }
+      if (sub === 'on') { s.antiraid.enabled = true; saveSettings(); return interaction.reply({ content: '✅ AntiRaid activé.' }); }
+      if (sub === 'off') { s.antiraid.enabled = false; saveSettings(); return interaction.reply({ content: '⏸️ AntiRaid désactivé.' }); }
+      if (sub === 'status') {
+        return interaction.reply({ embeds: [new EmbedBuilder().setColor(state.level === 'RAID' ? COLOR_DANGER : state.level === 'ALERTE' ? COLOR_WARNING : COLOR_SUCCESS).setTitle('🛡️ Statut AntiRaid')
+          .addFields(
+            { name: 'Activé', value: s.antiraid.enabled ? '✅ Oui' : '❌ Non', inline: true },
+            { name: 'Niveau actuel', value: state.level, inline: true },
+            { name: 'Score de risque', value: `${state.score}/100`, inline: true },
+            { name: 'Lockdown', value: state.lockdown ? '🔒 Actif' : '🔓 Inactif', inline: true },
+            { name: 'Arrivées (5 min)', value: `${state.joinTimestamps.length}`, inline: true },
+            { name: 'Salon alertes', value: s.antiraid.alertChannelId ? `<#${s.antiraid.alertChannelId}>` : 'Non défini', inline: true },
+          )] });
+      }
+      if (sub === 'config') {
+        return interaction.reply({ embeds: [new EmbedBuilder().setColor(COLOR).setTitle('⚙️ Config AntiRaid — Seuils par fenêtre')
+          .setDescription(RAID_WINDOWS.map(w => `**${w.ms / 1000}s** → seuil d'alerte : ${w.seuil} arrivées`).join('\n') + '\n\n*Ces seuils sont fixes dans cette version pour garantir la fiabilité de la détection.*')], ephemeral: true });
+      }
+      if (sub === 'lockdown') { await triggerLockdown(interaction.guild, `Déclenché manuellement par ${interaction.user.tag}`); return interaction.reply({ content: '🔒 Lockdown activé manuellement.' }); }
+      if (sub === 'unlock') { await liftLockdown(interaction.guild); return interaction.reply({ content: '🔓 Lockdown levé.' }); }
+      if (sub === 'test') {
+        const { score, level } = computeRiskScore(interaction.guild.id, 0);
+        return interaction.reply({ content: `🧪 Test (sans impact réel) — Score actuel : ${score}/100 — Niveau : ${level}`, ephemeral: true });
+      }
     }
-    if (cmd === 'backup-restaurer') {
+
+    // ===== SÉCURITÉ : ANTINUKE =====
+    if (cmd === 'antinuke') {
       if (!interaction.memberPermissions.has(PermissionsBitField.Flags.Administrator)) return interaction.reply({ content: "Permission refusée (Administrateur requis).", ephemeral: true });
-      await interaction.deferReply({ ephemeral: true });
-      const result = await restoreServerBackup(interaction.guild);
+      const sub = interaction.options.getSubcommand();
+      const s = getSettings(interaction.guild.id);
+      if (sub === 'on') { s.antinuke.enabled = true; saveSettings(); return interaction.reply({ content: '✅ AntiNuke activé.' }); }
+      if (sub === 'off') { s.antinuke.enabled = false; saveSettings(); return interaction.reply({ content: '⏸️ AntiNuke désactivé.' }); }
+      if (sub === 'status') {
+        return interaction.reply({ embeds: [new EmbedBuilder().setColor(COLOR).setTitle('🛡️ Statut AntiNuke').addFields(
+          { name: 'Activé', value: s.antinuke.enabled ? '✅ Oui' : '❌ Non', inline: true },
+          { name: 'Rôles protégés', value: `${s.antinuke.protectedRoles.length}`, inline: true },
+          { name: 'Utilisateurs protégés', value: `${s.antinuke.protectedUsers.length}`, inline: true },
+        )] });
+      }
+      if (sub === 'protect-role') { const role = interaction.options.getRole('role'); if (!s.antinuke.protectedRoles.includes(role.id)) s.antinuke.protectedRoles.push(role.id); saveSettings(); return interaction.reply({ content: `✅ ${role} est maintenant protégé.` }); }
+      if (sub === 'unprotect-role') { const role = interaction.options.getRole('role'); s.antinuke.protectedRoles = s.antinuke.protectedRoles.filter(id => id !== role.id); saveSettings(); return interaction.reply({ content: `✅ ${role} n'est plus protégé.` }); }
+      if (sub === 'protect-user') { const user = interaction.options.getUser('membre'); if (!s.antinuke.protectedUsers.includes(user.id)) s.antinuke.protectedUsers.push(user.id); saveSettings(); return interaction.reply({ content: `✅ <@${user.id}> est maintenant protégé (ne sera jamais sanctionné par l'AntiNuke).` }); }
+      if (sub === 'unprotect-user') { const user = interaction.options.getUser('membre'); s.antinuke.protectedUsers = s.antinuke.protectedUsers.filter(id => id !== user.id); saveSettings(); return interaction.reply({ content: `✅ <@${user.id}> n'est plus protégé.` }); }
+    }
+
+    // ===== DASHBOARD SÉCURITÉ =====
+    if (cmd === 'security') {
+      const sub = interaction.options.getSubcommand();
+      if (sub === 'status') {
+        const s = getSettings(interaction.guild.id);
+        const state = getRaidState(interaction.guild.id);
+        const lastBackup = (backups[interaction.guild.id] || [])[0];
+        const incidents = securityIncidents.get(interaction.guild.id) || [];
+        const embed = new EmbedBuilder().setColor(state.level === 'RAID' ? COLOR_DANGER : COLOR)
+          .setTitle('🛡️ ・ Tableau de bord Sécurité')
+          .addFields(
+            { name: '🚨 AntiRaid', value: s.antiraid.enabled ? '✅ Actif' : '❌ Inactif', inline: true },
+            { name: '📊 Niveau', value: state.level, inline: true },
+            { name: '📈 Score de risque', value: `${state.score}/100`, inline: true },
+            { name: '🔒 Lockdown', value: state.lockdown ? 'Actif' : 'Inactif', inline: true },
+            { name: '🛡️ AntiNuke', value: s.antinuke.enabled ? '✅ Actif' : '❌ Inactif', inline: true },
+            { name: '💾 Dernier backup', value: lastBackup ? lastBackup.date : 'Aucun', inline: true },
+            { name: '📋 Incidents récents', value: incidents.length > 0 ? incidents.slice(0, 5).map(i => `\`${i.date}\` **${i.type}** — ${i.detail}`).join('\n') : 'Aucun incident récent.' },
+          ).setTimestamp();
+        return interaction.reply({ embeds: [embed] });
+      }
+    }
+
+    if (cmd === 'backup') {
+      if (!interaction.memberPermissions.has(PermissionsBitField.Flags.Administrator)) return interaction.reply({ content: "Permission refusée (Administrateur requis).", ephemeral: true });
+      const sub = interaction.options.getSubcommand();
+      if (sub === 'create') {
+        await interaction.deferReply({ ephemeral: true });
+        const backup = createServerBackup(interaction.guild);
+        return interaction.editReply({ content: `✅ Sauvegarde créée (ID \`${backup.id}\`) : ${backup.roles.length} rôle(s), ${backup.categories.length} catégorie(s), ${backup.channels.length} salon(s).` });
+      }
+      if (sub === 'list') {
+        const list = backups[interaction.guild.id] || [];
+        if (list.length === 0) return interaction.reply({ content: "Aucune sauvegarde n'existe. Utilise `/backup create`.", ephemeral: true });
+        return interaction.reply({ embeds: [new EmbedBuilder().setColor(COLOR).setTitle('💾 Sauvegardes disponibles')
+          .setDescription(list.map((b, i) => `**${i + 1}.** \`${b.id}\` — ${b.date} (${b.roles.length} rôles, ${b.categories.length} catégories, ${b.channels.length} salons)`).join('\n'))], ephemeral: true });
+      }
+      if (sub === 'restore') {
+        const list = backups[interaction.guild.id] || [];
+        if (list.length === 0) return interaction.reply({ content: "Aucune sauvegarde n'existe. Utilise `/backup create`.", ephemeral: true });
+        const id = interaction.options.getString('id') || list[0].id;
+        const target = list.find(b => b.id === id);
+        if (!target) return interaction.reply({ content: `Sauvegarde \`${id}\` introuvable. Utilise \`/backup list\`.`, ephemeral: true });
+        const embed = new EmbedBuilder().setColor(COLOR_WARNING).setTitle('⚠️ Confirmer la restauration')
+          .setDescription(`Tu vas restaurer la sauvegarde du **${target.date}** (${target.roles.length} rôles, ${target.categories.length} catégories, ${target.channels.length} salons).\n\nSeuls les éléments **manquants** seront recréés, rien ne sera supprimé ni dupliqué.`);
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`backup_confirm:${target.id}`).setLabel('Confirmer la restauration').setEmoji('✅').setStyle(ButtonStyle.Danger),
+          new ButtonBuilder().setCustomId('backup_cancel').setLabel('Annuler').setStyle(ButtonStyle.Secondary),
+        );
+        return interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
+      }
+    }
+    if (interaction.isButton() && interaction.customId.startsWith('backup_confirm:')) {
+      await interaction.update({ content: '⏳ Restauration en cours...', embeds: [], components: [] });
+      const id = interaction.customId.split(':')[1];
+      const result = await restoreServerBackup(interaction.guild, id);
       if (result.error) return interaction.editReply({ content: `❌ ${result.error}` });
-      return interaction.editReply({ content: `✅ Restauration terminée : ${result.rolesCreated} rôle(s), ${result.categoriesCreated} catégorie(s) et ${result.channelsCreated} salon(s) recréés (seuls les éléments manquants ont été recréés, rien n'a été dupliqué).` });
+      return interaction.editReply({ content: `✅ Restauration terminée : ${result.rolesCreated} rôle(s), ${result.categoriesCreated} catégorie(s) et ${result.channelsCreated} salon(s) recréés.` });
     }
-    if (cmd === 'backup-info') {
-      const backup = backups[interaction.guild.id];
-      if (!backup) return interaction.reply({ content: "Aucune sauvegarde n'existe pour ce serveur. Utilise `/backup-creer`.", ephemeral: true });
-      return interaction.reply({ embeds: [new EmbedBuilder().setColor(COLOR).setTitle('💾 Dernière sauvegarde').addFields(
-        { name: 'Date', value: backup.date, inline: true },
-        { name: 'Rôles', value: `${backup.roles.length}`, inline: true },
-        { name: 'Catégories', value: `${backup.categories.length}`, inline: true },
-        { name: 'Salons', value: `${backup.channels.length}`, inline: true },
-      )], ephemeral: true });
+    if (interaction.isButton() && interaction.customId === 'backup_cancel') {
+      return interaction.update({ content: '❌ Restauration annulée.', embeds: [], components: [] });
     }
 
     if (cmd === 'config') {
@@ -1158,6 +1391,8 @@ client.on('interactionCreate', async (interaction) => {
       { name: '🎉  Utilitaires', value: '`/ping` `/avatar` `/userinfo` `/serverinfo` `/suggestion` `/annonce` `/sondage`' },
       { name: '🎮  Fun', value: '`/8ball` `/des` `/pileouface`' },
       { name: '🔧  Configuration (staff)', value: '`/config` `/set-staffrole` `/set-ticketcategorie` `/set-rolecivil` `/set-welcome` `/set-logs` `/set-reglement` `/set-liens` `/set-urgence` `/set-horaire` `/set-suggestions`' },
+      { name: '🛡️  Sécurité (admin)', value: '`/antiraid` `/antinuke` `/security status` `/backup`' },
+      { name: '🎊  Serveur', value: '`/membercount` `/choose` `/say` `/nickname` `/purge-user` `/afk` `/remind` `/giveaway`' },
       { name: '📈  Niveaux', value: '`/niveau voir` `/niveau ajouter` `/niveau retirer` `/niveau set` `/niveau reset` `/niveau config` `/niveau recompense` `/classement`' },
     ).setFooter({ text: `${interaction.guild.name} • Bot premium`, iconURL: BOT_ICON() }).setTimestamp()] });
 
@@ -1439,18 +1674,29 @@ client.on('guildMemberAdd', async (member) => {
 
     // Détection compte récent
     const accountAge = Date.now() - member.user.createdTimestamp;
-    if (accountAge < 7 * 24 * 60 * 60 * 1000) {
+    const isRecentAccount = accountAge < 7 * 24 * 60 * 60 * 1000;
+    if (isRecentAccount) {
       await sendLog(member.guild, new EmbedBuilder().setColor(0xe53e3e).setTitle('⚠️ Compte récemment créé').setDescription(`<@${member.id}> a créé son compte il y a moins de 7 jours.`).setTimestamp());
     }
 
-    // Anti-raid : trop d'arrivées rapprochées
-    if (s.automod.antiRaid) {
-      const now = Date.now();
-      s.recentJoins = (s.recentJoins || []).filter(t => now - t < 10000);
-      s.recentJoins.push(now);
-      saveSettings();
-      if (s.recentJoins.length >= 8) {
-        await sendLog(member.guild, new EmbedBuilder().setColor(0xe53e3e).setTitle('🚨 Raid potentiel détecté').setDescription('8+ arrivées en moins de 10 secondes.').setTimestamp());
+    // AntiRaid : score de risque sur plusieurs fenêtres temporelles
+    if (s.antiraid.enabled) {
+      const state = getRaidState(member.guild.id);
+      state.joinTimestamps.push(Date.now());
+      const recentAccounts = state.joinTimestamps.filter(t => Date.now() - t < 60000).length;
+      const newAccountRatio = recentAccounts > 0 ? (isRecentAccount ? 1 : 0) : 0;
+      const previousLevel = state.level;
+      const { score, level } = computeRiskScore(member.guild.id, newAccountRatio);
+
+      if (level !== previousLevel && (level === 'SURVEILLANCE' || level === 'ALERTE' || level === 'RAID')) {
+        addIncident(member.guild.id, 'NIVEAU_MENACE', `Passage à ${level} (score ${score})`);
+        await securityLog(member.guild, `⚠️ AntiRaid — Niveau ${level}`, [
+          { name: 'Score de risque', value: `${score}/100`, inline: true },
+          { name: 'Arrivées (60s)', value: `${state.joinTimestamps.filter(t => Date.now() - t < 60000).length}`, inline: true },
+        ], level === 'RAID' ? COLOR_DANGER : COLOR_WARNING);
+      }
+      if (level === 'RAID' && !state.lockdown) {
+        await triggerLockdown(member.guild, `Score de risque critique (${score}/100) — raid probable détecté automatiquement.`);
       }
     }
 
@@ -1462,6 +1708,31 @@ client.on('guildMemberAdd', async (member) => {
       if (channel) await channel.send({ embeds: [new EmbedBuilder().setColor(COLOR).setTitle(`Bienvenue sur ${member.guild.name} !`).setDescription(`Bienvenue <@${member.id}> !`).setThumbnail(member.user.displayAvatarURL()).setTimestamp()] });
     }
   } catch (err) { console.error('guildMemberAdd:', err); }
+});
+// AntiNuke : suivi des actions destructrices via les événements + Audit Logs
+client.on('channelDelete', async (channel) => {
+  if (!channel.guild) return;
+  const executor = await findAuditExecutor(channel.guild, 12 /* CHANNEL_DELETE */, channel.id);
+  await trackNukeAction(channel.guild, 'channelDelete', executor);
+});
+client.on('channelCreate', async (channel) => {
+  if (!channel.guild) return;
+  const executor = await findAuditExecutor(channel.guild, 10 /* CHANNEL_CREATE */, channel.id);
+  await trackNukeAction(channel.guild, 'channelCreate', executor);
+});
+client.on('roleDelete', async (role) => {
+  const s = getSettings(role.guild.id);
+  if (s.antinuke.protectedRoles.includes(role.id)) {
+    const executor = await findAuditExecutor(role.guild, 32 /* ROLE_DELETE */, role.id);
+    addIncident(role.guild.id, 'RÔLE_PROTÉGÉ', `Le rôle protégé "${role.name}" a été supprimé par ${executor ? executor.tag : 'inconnu'}`);
+    await securityLog(role.guild, '🔴 ALERTE CRITIQUE — Rôle protégé supprimé', [{ name: 'Rôle', value: role.name, inline: true }, { name: 'Responsable', value: executor ? `<@${executor.id}>` : 'Inconnu', inline: true }]);
+  }
+  const executor = await findAuditExecutor(role.guild, 32, role.id);
+  await trackNukeAction(role.guild, 'roleDelete', executor);
+});
+client.on('roleCreate', async (role) => {
+  const executor = await findAuditExecutor(role.guild, 30 /* ROLE_CREATE */, role.id);
+  await trackNukeAction(role.guild, 'roleCreate', executor);
 });
 client.on('guildMemberRemove', async (member) => {
   await sendLog(member.guild, new EmbedBuilder().setColor(0xe53e3e).setTitle('➖ Départ').setDescription(`${member.user.tag} a quitté le serveur.`).setTimestamp());
