@@ -41,6 +41,10 @@ const RAPPORTS_PATH = path.join(DATA_DIR, 'rapports.json');
 const CNI_PATH = path.join(DATA_DIR, 'cni.json');
 const CANDIDATURES_PATH = path.join(DATA_DIR, 'candidatures.json');
 const BACKUPS_PATH = path.join(DATA_DIR, 'backups.json');
+const ABSENCES_PATH = path.join(DATA_DIR, 'absences.json');
+const SERVICES_PATH = path.join(DATA_DIR, 'services.json');
+const EVALUATIONS_PATH = path.join(DATA_DIR, 'evaluations.json');
+const ROBLOX_PATH = path.join(DATA_DIR, 'roblox.json');
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 function loadJson(fp, fb) { try { return JSON.parse(fs.readFileSync(fp, 'utf8')); } catch { return fb; } }
@@ -82,6 +86,10 @@ let rapports = loadJson(RAPPORTS_PATH, []); // { id, guildId, auteur, service, d
 let cniData = loadJson(CNI_PATH, {}); // clé: `${guildId}:${userId}`
 let candidatures = loadJson(CANDIDATURES_PATH, []); // [{id, type, userId, channelId, guildId, statut, date}]
 let backups = loadJson(BACKUPS_PATH, {}); // backups[guildId] = [ { id, date, roles, categories, channels }, ... ] (5 dernières)
+let absences = loadJson(ABSENCES_PATH, []); // [{id, guildId, userId, dateDebut, dateFin, motif, statut, responsableId, raisonReponse}]
+let services = loadJson(SERVICES_PATH, {}); // services[`${guildId}:${userId}`] = { enService, debut, totalMs, historique:[{debut,fin,dureeMs}] }
+let evaluations = loadJson(EVALUATIONS_PATH, []); // [{id, guildId, userId, criteres:{}, commentaire, responsableId, date}]
+let robloxLinks = loadJson(ROBLOX_PATH, {}); // robloxLinks[`${guildId}:${userId}`] = { robloxId, robloxUsername }
 
 function createServerBackup(guild) {
   const roles = guild.roles.cache
@@ -1392,7 +1400,9 @@ client.on('interactionCreate', async (interaction) => {
       { name: '🎮  Fun', value: '`/8ball` `/des` `/pileouface`' },
       { name: '🔧  Configuration (staff)', value: '`/config` `/set-staffrole` `/set-ticketcategorie` `/set-rolecivil` `/set-welcome` `/set-logs` `/set-reglement` `/set-liens` `/set-urgence` `/set-horaire` `/set-suggestions`' },
       { name: '🛡️  Sécurité (admin)', value: '`/antiraid` `/antinuke` `/security status` `/backup`' },
-      { name: '🎊  Serveur', value: '`/membercount` `/choose` `/say` `/nickname` `/purge-user` `/afk` `/remind` `/giveaway`' },
+      { name: '🎊  Serveur', value: '`/membercount` `/choose` `/say` `/nickname` `/purge-user` `/afk` `/remind` `/giveaway` `/timestamp` `/channelinfo` `/calc`' },
+      { name: '👔  Gestion Staff', value: '`/absence` `/service` `/evaluation`' },
+      { name: '🎮  Roblox', value: '`/roblox lier` `/roblox voir`' },
       { name: '📈  Niveaux', value: '`/niveau voir` `/niveau ajouter` `/niveau retirer` `/niveau set` `/niveau reset` `/niveau config` `/niveau recompense` `/classement`' },
     ).setFooter({ text: `${interaction.guild.name} • Bot premium`, iconURL: BOT_ICON() }).setTimestamp()] });
 
@@ -1657,6 +1667,171 @@ client.on('interactionCreate', async (interaction) => {
       if (!g) return interaction.reply({ content: 'Ce giveaway est terminé.', ephemeral: true });
       g.participants.add(interaction.user.id);
       return interaction.reply({ content: `✅ Tu participes au giveaway **${g.prix}** !`, ephemeral: true });
+    }
+
+    // ===== ABSENCES STAFF =====
+    if (cmd === 'absence') {
+      const sub = interaction.options.getSubcommand();
+      const s = getSettings(interaction.guild.id);
+      const isStaff = s.staffRoleId && interaction.member.roles.cache.has(s.staffRoleId);
+
+      if (sub === 'declarer') {
+        const dateDebut = interaction.options.getString('date_debut');
+        const dateFin = interaction.options.getString('date_fin');
+        const motif = interaction.options.getString('motif');
+        const entry = { id: genId(), guildId: interaction.guild.id, userId: interaction.user.id, dateDebut, dateFin, motif, statut: 'en_attente', responsableId: null, raisonReponse: null };
+        absences.push(entry);
+        saveJson(ABSENCES_PATH, absences);
+        if (s.logsChannelId) {
+          const ch = interaction.guild.channels.cache.get(s.logsChannelId);
+          if (ch) ch.send({ embeds: [new EmbedBuilder().setColor(COLOR_WARNING).setTitle('🏖️ Nouvelle demande d\'absence').addFields(
+            { name: 'Membre', value: `<@${interaction.user.id}>`, inline: true }, { name: 'ID', value: `\`${entry.id}\``, inline: true },
+            { name: 'Du', value: dateDebut, inline: true }, { name: 'Au', value: dateFin, inline: true }, { name: 'Motif', value: motif },
+          )] }).catch(() => {});
+        }
+        return interaction.reply({ content: `✅ Demande d'absence envoyée (ID \`${entry.id}\`), en attente de validation.`, ephemeral: true });
+      }
+      if (sub === 'accepter' || sub === 'refuser') {
+        if (!isStaff && !interaction.memberPermissions.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({ content: "Permission refusée.", ephemeral: true });
+        const id = interaction.options.getString('id');
+        const entry = absences.find(a => a.id === id && a.guildId === interaction.guild.id);
+        if (!entry) return interaction.reply({ content: 'Demande introuvable.', ephemeral: true });
+        entry.statut = sub === 'accepter' ? 'acceptee' : 'refusee';
+        entry.responsableId = interaction.user.id;
+        entry.raisonReponse = interaction.options.getString('raison') || null;
+        saveJson(ABSENCES_PATH, absences);
+        const user = await client.users.fetch(entry.userId).catch(() => null);
+        if (user) user.send(`${sub === 'accepter' ? '✅' : '❌'} Ton absence du ${entry.dateDebut} au ${entry.dateFin} a été **${entry.statut === 'acceptee' ? 'acceptée' : 'refusée'}** sur **${interaction.guild.name}**.${entry.raisonReponse ? ` Raison : ${entry.raisonReponse}` : ''}`).catch(() => {});
+        return interaction.reply({ content: `✅ Absence \`${id}\` ${entry.statut === 'acceptee' ? 'acceptée' : 'refusée'}.` });
+      }
+      if (sub === 'liste') {
+        const enAttente = absences.filter(a => a.guildId === interaction.guild.id && a.statut === 'en_attente');
+        if (enAttente.length === 0) return interaction.reply({ content: 'Aucune demande en attente.', ephemeral: true });
+        return interaction.reply({ embeds: [new EmbedBuilder().setColor(COLOR_WARNING).setTitle('🏖️ Demandes en attente')
+          .setDescription(enAttente.map(a => `\`${a.id}\` — <@${a.userId}> : ${a.dateDebut} → ${a.dateFin} (${a.motif})`).join('\n'))], ephemeral: true });
+      }
+      if (sub === 'actuel') {
+        const now = new Date();
+        const actives = absences.filter(a => a.guildId === interaction.guild.id && a.statut === 'acceptee');
+        if (actives.length === 0) return interaction.reply({ content: 'Aucun membre du staff en absence actuellement.' });
+        return interaction.reply({ embeds: [new EmbedBuilder().setColor(COLOR).setTitle('🏖️ Absences validées')
+          .setDescription(actives.map(a => `<@${a.userId}> — ${a.dateDebut} → ${a.dateFin} (${a.motif})`).join('\n'))] });
+      }
+    }
+
+    // ===== SERVICE STAFF =====
+    if (cmd === 'service') {
+      const sub = interaction.options.getSubcommand();
+      const k = key(interaction.guild.id, interaction.user.id);
+      if (!services[k]) services[k] = { enService: false, debut: null, totalMs: 0, historique: [] };
+      const rec = services[k];
+
+      if (sub === 'prendre') {
+        if (rec.enService) return interaction.reply({ content: 'Tu es déjà en service.', ephemeral: true });
+        rec.enService = true;
+        rec.debut = Date.now();
+        saveJson(SERVICES_PATH, services);
+        return interaction.reply({ content: '🟢 Tu as pris ton service.' });
+      }
+      if (sub === 'terminer') {
+        if (!rec.enService) return interaction.reply({ content: "Tu n'es pas en service.", ephemeral: true });
+        const dureeMs = Date.now() - rec.debut;
+        rec.totalMs += dureeMs;
+        rec.historique.push({ debut: rec.debut, fin: Date.now(), dureeMs });
+        rec.historique = rec.historique.slice(-20);
+        rec.enService = false;
+        rec.debut = null;
+        saveJson(SERVICES_PATH, services);
+        const heures = Math.floor(dureeMs / 3600000), minutes = Math.floor((dureeMs % 3600000) / 60000);
+        return interaction.reply({ content: `⏹️ Service terminé. Durée : ${heures}h${minutes}min.` });
+      }
+      if (sub === 'liste') {
+        const prefix = `${interaction.guild.id}:`;
+        const enService = Object.entries(services).filter(([sk, r]) => sk.startsWith(prefix) && r.enService);
+        if (enService.length === 0) return interaction.reply({ content: 'Personne en service actuellement.' });
+        return interaction.reply({ embeds: [new EmbedBuilder().setColor(COLOR_SUCCESS).setTitle(`🟢 STAFFS EN SERVICE (${enService.length})`)
+          .setDescription(enService.map(([sk, r]) => `<@${sk.split(':')[1]}> — En service depuis <t:${Math.floor(r.debut / 1000)}:R>`).join('\n'))] });
+      }
+      if (sub === 'stats') {
+        const target = interaction.options.getUser('membre') || interaction.user;
+        const targetRec = services[key(interaction.guild.id, target.id)] || { totalMs: 0, historique: [] };
+        const heures = Math.floor(targetRec.totalMs / 3600000), minutes = Math.floor((targetRec.totalMs % 3600000) / 60000);
+        return interaction.reply({ embeds: [new EmbedBuilder().setColor(COLOR).setTitle(`⏱️ Statistiques de service — ${target.username}`)
+          .addFields({ name: 'Temps total', value: `${heures}h${minutes}min`, inline: true }, { name: 'Sessions', value: `${targetRec.historique.length}`, inline: true })] });
+      }
+    }
+
+    // ===== ÉVALUATIONS STAFF =====
+    if (cmd === 'evaluation') {
+      const sub = interaction.options.getSubcommand();
+      if (sub === 'creer') {
+        if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({ content: "Permission refusée.", ephemeral: true });
+        const target = interaction.options.getUser('membre');
+        const criteres = {
+          activite: interaction.options.getInteger('activite'),
+          serieux: interaction.options.getInteger('serieux'),
+          rp: interaction.options.getInteger('rp'),
+          moderation: interaction.options.getInteger('moderation'),
+          communication: interaction.options.getInteger('communication'),
+          travail_equipe: interaction.options.getInteger('travail_equipe'),
+        };
+        const commentaire = interaction.options.getString('commentaire') || 'Aucun';
+        const entry = { id: genId(), guildId: interaction.guild.id, userId: target.id, criteres, commentaire, responsableId: interaction.user.id, date: new Date().toLocaleString('fr-FR') };
+        evaluations.push(entry);
+        saveJson(EVALUATIONS_PATH, evaluations);
+        return interaction.reply({ content: `✅ Évaluation enregistrée pour <@${target.id}>.` });
+      }
+      if (sub === 'voir') {
+        const target = interaction.options.getUser('membre') || interaction.user;
+        const list = evaluations.filter(e => e.guildId === interaction.guild.id && e.userId === target.id).slice(-5).reverse();
+        if (list.length === 0) return interaction.reply({ content: `<@${target.id}> n'a aucune évaluation.`, ephemeral: true });
+        const embed = new EmbedBuilder().setColor(COLOR).setTitle(`⭐ Évaluations — ${target.username}`);
+        for (const e of list) {
+          const moyenne = (Object.values(e.criteres).reduce((a, b) => a + b, 0) / 6).toFixed(1);
+          embed.addFields({ name: `${e.date} — Note moyenne : ${moyenne}/5`, value: `Activité ${e.criteres.activite}/5 · Sérieux ${e.criteres.serieux}/5 · RP ${e.criteres.rp}/5 · Modération ${e.criteres.moderation}/5 · Communication ${e.criteres.communication}/5 · Travail d'équipe ${e.criteres.travail_equipe}/5\n💬 ${e.commentaire}` });
+        }
+        return interaction.reply({ embeds: [embed], ephemeral: true });
+      }
+    }
+
+    // ===== ROBLOX (infos publiques stockées manuellement) =====
+    if (cmd === 'roblox') {
+      const sub = interaction.options.getSubcommand();
+      if (sub === 'lier') {
+        const robloxId = interaction.options.getString('id');
+        const robloxUsername = interaction.options.getString('pseudo');
+        robloxLinks[key(interaction.guild.id, interaction.user.id)] = { robloxId, robloxUsername };
+        saveJson(ROBLOX_PATH, robloxLinks);
+        return interaction.reply({ content: `✅ Compte Roblox **${robloxUsername}** (ID \`${robloxId}\`) lié à ton profil.`, ephemeral: true });
+      }
+      if (sub === 'voir') {
+        const target = interaction.options.getUser('membre') || interaction.user;
+        const link = robloxLinks[key(interaction.guild.id, target.id)];
+        if (!link) return interaction.reply({ content: `<@${target.id}> n'a pas encore lié de compte Roblox. Utilise \`/roblox lier\`.`, ephemeral: true });
+        return interaction.reply({ embeds: [new EmbedBuilder().setColor(COLOR).setTitle('🎮 Compte Roblox lié')
+          .setThumbnail(`https://www.roblox.com/headshot-thumbnail/image?userId=${link.robloxId}&width=150&height=150&format=png`)
+          .addFields({ name: 'Pseudo Roblox', value: link.robloxUsername, inline: true }, { name: 'Roblox User ID', value: link.robloxId, inline: true }, { name: 'Discord', value: `<@${target.id}>`, inline: true })] });
+      }
+    }
+
+    // ===== COMMANDES UTILITAIRES SUPPLÉMENTAIRES =====
+    if (cmd === 'timestamp') {
+      const style = interaction.options.getString('style') || 'f';
+      const now = Math.floor(Date.now() / 1000);
+      return interaction.reply({ content: `Voici le code à copier-coller : \`<t:${now}:${style}>\` → rendu : <t:${now}:${style}>`, ephemeral: true });
+    }
+    if (cmd === 'channelinfo') {
+      const ch = interaction.channel;
+      return interaction.reply({ embeds: [new EmbedBuilder().setColor(COLOR).setTitle(`# ${ch.name}`)
+        .addFields({ name: 'ID', value: ch.id, inline: true }, { name: 'Type', value: `${ch.type}`, inline: true }, { name: 'Créé le', value: `<t:${Math.floor(ch.createdTimestamp / 1000)}:D>`, inline: true })] });
+    }
+    if (cmd === 'calc') {
+      const expr = interaction.options.getString('expression');
+      if (!/^[0-9+\-*/(). ]+$/.test(expr)) return interaction.reply({ content: "Expression invalide (chiffres et + - * / ( ) uniquement).", ephemeral: true });
+      try {
+        const result = Function(`"use strict"; return (${expr})`)();
+        return interaction.reply({ content: `🧮 ${expr} = **${result}**` });
+      } catch { return interaction.reply({ content: "Impossible de calculer cette expression.", ephemeral: true }); }
     }
   } catch (err) {
     console.error(err);

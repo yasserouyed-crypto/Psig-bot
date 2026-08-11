@@ -196,13 +196,60 @@ const commands = [
     .addStringOption(o => o.setName('prix').setDescription('Ce qui est à gagner').setRequired(true))
     .addIntegerOption(o => o.setName('minutes').setDescription('Durée en minutes').setRequired(true))
     .addIntegerOption(o => o.setName('gagnants').setDescription('Nombre de gagnants (défaut 1)').setRequired(false)),
+
+  // ----- Absences staff -----
+  new SlashCommandBuilder().setName('absence').setDescription('Gestion des absences staff')
+    .addSubcommand(s => s.setName('declarer').setDescription('Déclare une absence')
+      .addStringOption(o => o.setName('date_debut').setDescription('Date de début (ex: 12/08/2026)').setRequired(true))
+      .addStringOption(o => o.setName('date_fin').setDescription('Date de fin').setRequired(true))
+      .addStringOption(o => o.setName('motif').setDescription('Motif').setRequired(true)))
+    .addSubcommand(s => s.setName('accepter').setDescription('Accepte une demande (staff)').addStringOption(o => o.setName('id').setDescription('ID de la demande').setRequired(true)))
+    .addSubcommand(s => s.setName('refuser').setDescription('Refuse une demande (staff)').addStringOption(o => o.setName('id').setDescription('ID de la demande').setRequired(true)).addStringOption(o => o.setName('raison').setDescription('Raison du refus').setRequired(false)))
+    .addSubcommand(s => s.setName('liste').setDescription('Liste les demandes en attente'))
+    .addSubcommand(s => s.setName('actuel').setDescription('Affiche les absences validées en cours')),
+
+  // ----- Service staff -----
+  new SlashCommandBuilder().setName('service').setDescription('Gestion du service staff')
+    .addSubcommand(s => s.setName('prendre').setDescription('Prendre son service'))
+    .addSubcommand(s => s.setName('terminer').setDescription('Terminer son service'))
+    .addSubcommand(s => s.setName('liste').setDescription('Liste les staffs en service'))
+    .addSubcommand(s => s.setName('stats').setDescription('Statistiques de service').addUserOption(o => o.setName('membre').setDescription('Membre').setRequired(false))),
+
+  // ----- Évaluations staff -----
+  new SlashCommandBuilder().setName('evaluation').setDescription('Évaluations du staff')
+    .addSubcommand(s => s.setName('creer').setDescription('Évalue un membre du staff')
+      .addUserOption(o => o.setName('membre').setDescription('Membre à évaluer').setRequired(true))
+      .addIntegerOption(o => o.setName('activite').setDescription('Activité (1-5)').setRequired(true).setMinValue(1).setMaxValue(5))
+      .addIntegerOption(o => o.setName('serieux').setDescription('Sérieux (1-5)').setRequired(true).setMinValue(1).setMaxValue(5))
+      .addIntegerOption(o => o.setName('rp').setDescription('RP (1-5)').setRequired(true).setMinValue(1).setMaxValue(5))
+      .addIntegerOption(o => o.setName('moderation').setDescription('Modération (1-5)').setRequired(true).setMinValue(1).setMaxValue(5))
+      .addIntegerOption(o => o.setName('communication').setDescription('Communication (1-5)').setRequired(true).setMinValue(1).setMaxValue(5))
+      .addIntegerOption(o => o.setName('travail_equipe').setDescription("Travail d'équipe (1-5)").setRequired(true).setMinValue(1).setMaxValue(5))
+      .addStringOption(o => o.setName('commentaire').setDescription('Commentaire').setRequired(false)))
+    .addSubcommand(s => s.setName('voir').setDescription('Voit les évaluations d\'un membre').addUserOption(o => o.setName('membre').setDescription('Membre').setRequired(false))),
+
+  // ----- Roblox -----
+  new SlashCommandBuilder().setName('roblox').setDescription('Lien de compte Roblox')
+    .addSubcommand(s => s.setName('lier').setDescription('Lie ton compte Roblox à ton profil').addStringOption(o => o.setName('id').setDescription('Roblox User ID').setRequired(true)).addStringOption(o => o.setName('pseudo').setDescription('Pseudo Roblox').setRequired(true)))
+    .addSubcommand(s => s.setName('voir').setDescription('Voir le compte Roblox lié').addUserOption(o => o.setName('membre').setDescription('Membre').setRequired(false))),
+
+  // ----- Utilitaires supplémentaires -----
+  new SlashCommandBuilder().setName('timestamp').setDescription('Génère un horodatage Discord')
+    .addStringOption(o => o.setName('style').setDescription('Style (f, d, t, R...)').setRequired(false)),
+  new SlashCommandBuilder().setName('channelinfo').setDescription('Infos sur le salon actuel'),
+  new SlashCommandBuilder().setName('calc').setDescription('Calculatrice simple').addStringOption(o => o.setName('expression').setDescription('Ex: (2+3)*4').setRequired(true)),
 ].map(cmd => cmd.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+const OLD_GUILD_ID = '1529088552271609940'; // ancien serveur où les commandes étaient enregistrées individuellement (avant le passage en global)
 
 (async () => {
   try {
-    console.log('Déploiement des commandes slash...');
+    // Nettoie les anciennes commandes propres à un seul serveur (cause des doublons)
+    await rest.put(Routes.applicationGuildCommands(process.env.CLIENT_ID, OLD_GUILD_ID), { body: [] }).catch(() => {});
+    console.log('Anciennes commandes locales supprimées.');
+
+    console.log('Déploiement des commandes slash (global)...');
     await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
     console.log(`Commandes slash déployées avec succès (${commands.length}).`);
   } catch (error) {
