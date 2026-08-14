@@ -52,6 +52,9 @@ function saveJson(fp, d) { fs.writeFileSync(fp, JSON.stringify(d, null, 2)); }
 
 const DEFAULT_SETTINGS = {
   welcomeChannelId: null, suggestionsChannelId: null, logsChannelId: null,
+  departChannelId: null,
+  welcomeText: "Nous sommes ravis de te voir sur notre serveur, {serveur} !\n\nN'hésite pas à consulter le règlement et à passer un agréable séjour ici ! 🤝",
+  departText: "{pseudo} vient de quitter le serveur. À bientôt peut-être !",
   staffRoleId: null, ticketCategoryId: null, civilianRoleId: null,
   reglementText: "Aucun règlement défini. /set-reglement pour le configurer.",
   liensText: "Aucun lien défini. /set-liens pour les configurer.",
@@ -140,6 +143,12 @@ async function restoreServerBackup(guild, snapshotId) {
 }
 
 function key(guildId, userId) { return `${guildId}:${userId}`; }
+function applyPlaceholders(text, member) {
+  return text
+    .replace(/{membre}/g, `<@${member.id}>`)
+    .replace(/{pseudo}/g, member.user.username)
+    .replace(/{serveur}/g, member.guild.name);
+}
 
 function genId() { return Date.now().toString(36) + Math.floor(Math.random() * 1000).toString(36); }
 function getRecord(k) {
@@ -1338,6 +1347,25 @@ client.on('interactionCreate', async (interaction) => {
       saveSettings();
       return interaction.reply({ content: salon ? '✅ Salon de bienvenue défini.' : '✅ Message de bienvenue désactivé.', ephemeral: true });
     }
+    if (cmd === 'set-message-bienvenue') {
+      const s = getSettings(interaction.guild.id);
+      s.welcomeText = interaction.options.getString('texte');
+      saveSettings();
+      return interaction.reply({ content: '✅ Message de bienvenue mis à jour. Variables disponibles : `{membre}` `{pseudo}` `{serveur}`.', ephemeral: true });
+    }
+    if (cmd === 'set-salon-departs') {
+      const s = getSettings(interaction.guild.id);
+      const salon = interaction.options.getChannel('salon');
+      s.departChannelId = salon ? salon.id : null;
+      saveSettings();
+      return interaction.reply({ content: salon ? '✅ Salon des départs défini.' : '✅ Message de départ désactivé.', ephemeral: true });
+    }
+    if (cmd === 'set-message-depart') {
+      const s = getSettings(interaction.guild.id);
+      s.departText = interaction.options.getString('texte');
+      saveSettings();
+      return interaction.reply({ content: '✅ Message de départ mis à jour. Variables disponibles : `{membre}` `{pseudo}` `{serveur}`.', ephemeral: true });
+    }
     if (cmd === 'set-reglement') { const s = getSettings(interaction.guild.id); s.reglementText = interaction.options.getString('texte'); saveSettings(); return interaction.reply({ content: '✅ Règlement mis à jour.', ephemeral: true }); }
     if (cmd === 'set-liens') { const s = getSettings(interaction.guild.id); s.liensText = interaction.options.getString('texte'); saveSettings(); return interaction.reply({ content: '✅ Liens mis à jour.', ephemeral: true }); }
     if (cmd === 'set-urgence') { const s = getSettings(interaction.guild.id); s.urgenceText = interaction.options.getString('texte'); saveSettings(); return interaction.reply({ content: '✅ Urgences mises à jour.', ephemeral: true }); }
@@ -1354,11 +1382,13 @@ client.on('interactionCreate', async (interaction) => {
       if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({ content: "Permission refusée.", ephemeral: true });
       const s = getSettings(interaction.guild.id);
       const embed = new EmbedBuilder().setColor(COLOR)
-        .setAuthor({ name: interaction.guild.name, iconURL: interaction.guild.iconURL() || undefined })
+        .setAuthor({ name: `${interaction.guild.name} · Règlement`, iconURL: interaction.guild.iconURL() || undefined })
         .setThumbnail(BOT_ICON())
-        .setTitle('📜 ・ Règlement du serveur')
-        .setDescription(s.reglementText)
-        .setFooter({ text: 'Appuie sur le bouton ci-dessous pour accepter et accéder au serveur.' });
+        .setDescription(`# 📜 Règlement du serveur\n\n${s.reglementText}\n\n\u200b`)
+        .setFooter({ text: "✅ Appuie sur le bouton ci-dessous pour accepter et accéder au serveur", iconURL: BOT_ICON() })
+        .setTimestamp();
+      if (interaction.guild.bannerURL()) embed.setImage(interaction.guild.bannerURL({ size: 512 }));
+      else if (interaction.guild.iconURL()) embed.setImage(interaction.guild.iconURL({ size: 512 }));
       const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('reglement_accept').setLabel("J'accepte le règlement").setEmoji('✅').setStyle(ButtonStyle.Success));
       await interaction.channel.send({ embeds: [embed], components: [row] });
       return interaction.reply({ content: '✅ Panneau de règlement publié.', ephemeral: true });
@@ -1880,7 +1910,16 @@ client.on('guildMemberAdd', async (member) => {
     const channelId = s.welcomeChannelId;
     if (channelId) {
       const channel = member.guild.channels.cache.get(channelId);
-      if (channel) await channel.send({ embeds: [new EmbedBuilder().setColor(COLOR).setTitle(`Bienvenue sur ${member.guild.name} !`).setDescription(`Bienvenue <@${member.id}> !`).setThumbnail(member.user.displayAvatarURL()).setTimestamp()] });
+      if (channel) {
+        const embed = new EmbedBuilder().setColor(COLOR)
+          .setAuthor({ name: 'BIENVENUE', iconURL: member.guild.iconURL() || undefined })
+          .setDescription(`# 👋 Bienvenue ${member}\n\n${applyPlaceholders(s.welcomeText, member)}`)
+          .setThumbnail(member.user.displayAvatarURL({ size: 256 }))
+          .setTimestamp();
+        if (member.guild.bannerURL()) embed.setImage(member.guild.bannerURL({ size: 512 }));
+        else if (member.guild.iconURL()) embed.setImage(member.guild.iconURL({ size: 512 }));
+        await channel.send({ embeds: [embed] }).catch(() => {});
+      }
     }
   } catch (err) { console.error('guildMemberAdd:', err); }
 });
@@ -1911,6 +1950,18 @@ client.on('roleCreate', async (role) => {
 });
 client.on('guildMemberRemove', async (member) => {
   await sendLog(member.guild, new EmbedBuilder().setColor(0xe53e3e).setTitle('➖ Départ').setDescription(`${member.user.tag} a quitté le serveur.`).setTimestamp());
+  const s = getSettings(member.guild.id);
+  if (s.departChannelId) {
+    const channel = member.guild.channels.cache.get(s.departChannelId);
+    if (channel) {
+      const embed = new EmbedBuilder().setColor(COLOR_DANGER)
+        .setAuthor({ name: 'AU REVOIR', iconURL: member.guild.iconURL() || undefined })
+        .setDescription(`# 👋 Départ\n\n${applyPlaceholders(s.departText, member)}`)
+        .setThumbnail(member.user.displayAvatarURL({ size: 256 }))
+        .setTimestamp();
+      await channel.send({ embeds: [embed] }).catch(() => {});
+    }
+  }
 });
 client.on('guildMemberUpdate', async (oldM, newM) => {
   if (oldM.nickname !== newM.nickname) {

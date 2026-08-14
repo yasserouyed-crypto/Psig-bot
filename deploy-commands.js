@@ -104,6 +104,12 @@ const commands = [
   // ----- Configuration -----
   new SlashCommandBuilder().setName('set-welcome').setDescription('Définit ou désactive le salon de bienvenue').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addChannelOption(o => o.setName('salon').setDescription('Salon (laisse vide pour désactiver)').setRequired(false)),
+  new SlashCommandBuilder().setName('set-message-bienvenue').setDescription('Personnalise le texte du message de bienvenue').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addStringOption(o => o.setName('texte').setDescription('Texte (variables : {membre} {pseudo} {serveur})').setRequired(true)),
+  new SlashCommandBuilder().setName('set-salon-departs').setDescription('Définit ou désactive le salon des départs').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addChannelOption(o => o.setName('salon').setDescription('Salon (laisse vide pour désactiver)').setRequired(false)),
+  new SlashCommandBuilder().setName('set-message-depart').setDescription('Personnalise le texte du message de départ').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addStringOption(o => o.setName('texte').setDescription('Texte (variables : {membre} {pseudo} {serveur})').setRequired(true)),
   new SlashCommandBuilder().setName('set-reglement').setDescription('Définit le règlement').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addStringOption(o => o.setName('texte').setDescription('Texte du règlement').setRequired(true)),
   new SlashCommandBuilder().setName('set-liens').setDescription('Définit les liens utiles').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
