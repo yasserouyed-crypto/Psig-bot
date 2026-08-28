@@ -29,6 +29,7 @@ const PANEL_SELECT_ID = 'ticket_select_category';
 const MODAL_ID = 'ticket_modal_details';
 const CLAIM_BUTTON_ID = 'ticket_claim';
 const CLOSE_BUTTON_ID = 'ticket_close';
+const TICKET_MANAGE_ID = 'ticket_manage_select';
 
 // ---------- Stockage (fichiers JSON) ----------
 const DATA_DIR = path.join(__dirname, 'data');
@@ -350,12 +351,6 @@ function getTicketCategories(guildId) {
   if (!s.ticketCategories) s.ticketCategories = [];
   return s.ticketCategories;
 }
-const SUBJECT_BUTTON_ID = 'ticket_subject';
-const ADD_BUTTON_ID = 'ticket_add';
-const REMOVE_BUTTON_ID = 'ticket_remove';
-const SUBJECT_MODAL_ID = 'ticket_modal_subject';
-const ADD_MODAL_ID = 'ticket_modal_add';
-const REMOVE_MODAL_ID = 'ticket_modal_remove';
 
 async function createTicketChannel(interaction, title, fields, description, candidatureId) {
   const guild = interaction.guild;
@@ -385,14 +380,17 @@ async function createTicketChannel(interaction, title, fields, description, cand
     .addFields(...fields).setTimestamp();
   const buttons = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(CLOSE_BUTTON_ID).setLabel('Fermer').setStyle(ButtonStyle.Danger).setEmoji('🔒'),
-    new ButtonBuilder().setCustomId(CLAIM_BUTTON_ID).setLabel('Prendre en charge').setStyle(ButtonStyle.Success).setEmoji('🛡️'),
+    new ButtonBuilder().setCustomId(CLAIM_BUTTON_ID).setLabel('Prendre en charge').setStyle(ButtonStyle.Success).setEmoji('✅'),
   );
-  const buttons2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(SUBJECT_BUTTON_ID).setLabel('Sujet').setStyle(ButtonStyle.Secondary).setEmoji('⚙️'),
-    new ButtonBuilder().setCustomId(ADD_BUTTON_ID).setLabel('Ajouter').setStyle(ButtonStyle.Success).setEmoji('👍'),
-    new ButtonBuilder().setCustomId(REMOVE_BUTTON_ID).setLabel('Retirer').setStyle(ButtonStyle.Danger).setEmoji('👎'),
+  const manageSelect = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder().setCustomId(TICKET_MANAGE_ID).setPlaceholder('Gérer le ticket...').addOptions(
+      { label: 'Sujet', description: 'Modifier le sujet du ticket', emoji: 'ℹ️', value: 'sujet' },
+      { label: 'Ajouter', description: 'Ajouter un autre utilisateur au ticket', emoji: '➕', value: 'ajouter' },
+      { label: 'Retirer', description: 'Retirer un utilisateur du ticket', emoji: '➖', value: 'retirer' },
+      { label: 'Libérer le ticket', description: 'Annuler la prise en charge (staff uniquement)', emoji: '🔓', value: 'liberer' },
+    )
   );
-  const components = [buttons, buttons2];
+  const components = [buttons, manageSelect];
   if (candidatureId) {
     components.push(new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`candidature_accept:${candidatureId}`).setLabel('Accepter').setStyle(ButtonStyle.Success).setEmoji('✅'),
@@ -1059,44 +1057,47 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isButton() && interaction.customId === CLOSE_BUTTON_ID) return closeTicket(interaction);
 
     // Boutons de gestion du ticket : Sujet / Ajouter / Retirer
-    if (interaction.isButton() && [SUBJECT_BUTTON_ID, ADD_BUTTON_ID, REMOVE_BUTTON_ID].includes(interaction.customId)) {
+    // Menu déroulant "Gérer le ticket..." (Sujet / Ajouter / Retirer / Libérer)
+    if (interaction.isStringSelectMenu() && interaction.customId === TICKET_MANAGE_ID) {
       const staffRole = interaction.guild.roles.cache.get(getSettings(interaction.guild.id).staffRoleId);
       if (staffRole && !interaction.member.roles.cache.has(staffRole.id)) return interaction.reply({ content: "Réservé au staff.", ephemeral: true });
+      const choix = interaction.values[0];
 
-      if (interaction.customId === SUBJECT_BUTTON_ID) {
-        const modal = new ModalBuilder().setCustomId(SUBJECT_MODAL_ID).setTitle('Modifier le sujet du ticket');
+      if (choix === 'sujet') {
+        const modal = new ModalBuilder().setCustomId('ticket_subject_modal').setTitle('Modifier le sujet du ticket');
         modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('sujet').setLabel('Nouveau sujet').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(80)));
         return interaction.showModal(modal);
       }
-      if (interaction.customId === ADD_BUTTON_ID) {
-        const modal = new ModalBuilder().setCustomId(ADD_MODAL_ID).setTitle('Ajouter un membre au ticket');
+      if (choix === 'ajouter') {
+        const modal = new ModalBuilder().setCustomId('ticket_add_modal').setTitle('Ajouter un membre au ticket');
         modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('membre').setLabel('ID ou mention du membre').setStyle(TextInputStyle.Short).setRequired(true)));
         return interaction.showModal(modal);
       }
-      if (interaction.customId === REMOVE_BUTTON_ID) {
-        const modal = new ModalBuilder().setCustomId(REMOVE_MODAL_ID).setTitle('Retirer un membre du ticket');
+      if (choix === 'retirer') {
+        const modal = new ModalBuilder().setCustomId('ticket_remove_modal').setTitle('Retirer un membre du ticket');
         modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('membre').setLabel('ID ou mention du membre').setStyle(TextInputStyle.Short).setRequired(true)));
         return interaction.showModal(modal);
+      }
+      if (choix === 'liberer') {
+        return interaction.reply({ embeds: [new EmbedBuilder().setColor(COLOR).setDescription('🔓 Prise en charge annulée. Ce ticket est de nouveau disponible.')] });
       }
     }
-
-    if (interaction.isModalSubmit() && interaction.customId === SUBJECT_MODAL_ID) {
+    if (interaction.isModalSubmit() && interaction.customId === 'ticket_subject_modal') {
       const sujet = interaction.fields.getTextInputValue('sujet');
       await interaction.channel.setName(`ticket-${slugify(sujet)}`).catch(() => {});
-      await interaction.reply({ embeds: [new EmbedBuilder().setColor(COLOR).setDescription(`⚙️ Sujet mis à jour : **${sujet}**`)] });
-      return;
+      return interaction.reply({ embeds: [new EmbedBuilder().setColor(COLOR).setDescription(`⚙️ Sujet mis à jour : **${sujet}**`)] });
     }
-    if (interaction.isModalSubmit() && (interaction.customId === ADD_MODAL_ID || interaction.customId === REMOVE_MODAL_ID)) {
+    if (interaction.isModalSubmit() && (interaction.customId === 'ticket_add_modal' || interaction.customId === 'ticket_remove_modal')) {
       const raw = interaction.fields.getTextInputValue('membre');
       const userId = raw.replace(/[<@!>]/g, '').trim();
       const member = await interaction.guild.members.fetch(userId).catch(() => null);
       if (!member) return interaction.reply({ content: "Membre introuvable. Vérifie l'ID ou la mention.", ephemeral: true });
-      if (interaction.customId === ADD_MODAL_ID) {
+      if (interaction.customId === 'ticket_add_modal') {
         await interaction.channel.permissionOverwrites.edit(member.id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true });
-        return interaction.reply({ content: `👍 <@${member.id}> a été ajouté au ticket.` });
+        return interaction.reply({ content: `➕ <@${member.id}> a été ajouté au ticket.` });
       } else {
         await interaction.channel.permissionOverwrites.delete(member.id).catch(() => {});
-        return interaction.reply({ content: `👎 <@${member.id}> a été retiré du ticket.` });
+        return interaction.reply({ content: `➖ <@${member.id}> a été retiré du ticket.` });
       }
     }
 
