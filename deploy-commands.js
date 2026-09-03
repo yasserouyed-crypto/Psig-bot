@@ -41,6 +41,15 @@ const commands = [
     .addSubcommand(s => s.setName('status').setDescription('Tableau de bord sécurité complet')),
   new SlashCommandBuilder().setName('close').setDescription('Ferme le ticket en cours'),
   new SlashCommandBuilder().setName('recrutement').setDescription('Candidature de recrutement'),
+  new SlashCommandBuilder().setName('config-questions').setDescription('Personnalise les questions d\'un formulaire').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addStringOption(o => o.setName('formulaire').setDescription('Quel formulaire').setRequired(true).addChoices(
+      { name: 'Recrutement', value: 'recrutement' }, { name: 'Staff', value: 'staff' }, { name: 'Signalement', value: 'signalement' }, { name: 'Gang', value: 'gang' },
+    ))
+    .addStringOption(o => o.setName('question1').setDescription('Question 1').setRequired(true))
+    .addStringOption(o => o.setName('question2').setDescription('Question 2').setRequired(false))
+    .addStringOption(o => o.setName('question3').setDescription('Question 3').setRequired(false))
+    .addStringOption(o => o.setName('question4').setDescription('Question 4').setRequired(false))
+    .addStringOption(o => o.setName('question5').setDescription('Question 5').setRequired(false)),
   new SlashCommandBuilder().setName('staff').setDescription("Candidature pour l'équipe staff"),
   new SlashCommandBuilder().setName('signalement').setDescription('Signaler un problème'),
   new SlashCommandBuilder().setName('gang').setDescription('Demande de création de gang'),

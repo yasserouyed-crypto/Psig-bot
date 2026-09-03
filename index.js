@@ -1102,16 +1102,28 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     if (['recrutement', 'staff', 'signalement', 'gang'].includes(cmd)) {
-      const cfgs = {
-        recrutement: { title: 'Candidature — Recrutement', fields: [['motivation', 'Pourquoi nous rejoindre ?'], ['experience', 'Ton expérience']] },
-        staff: { title: 'Candidature — Staff', fields: [['motivation', 'Pourquoi devenir staff ?'], ['disponibilite', 'Tes disponibilités']] },
-        signalement: { title: 'Signalement', fields: [['sujet', 'Qui/quoi signales-tu ?'], ['details', 'Explique la situation']] },
-        gang: { title: 'Création de gang', fields: [['nom', 'Nom du gang'], ['description', 'Description']] },
+      const s = getSettings(interaction.guild.id);
+      const defaultQuestions = {
+        recrutement: ['Pourquoi nous rejoindre ?', 'Ton expérience'],
+        staff: ['Pourquoi devenir staff ?', 'Tes disponibilités'],
+        signalement: ['Qui/quoi signales-tu ?', 'Explique la situation'],
+        gang: ['Nom du gang', 'Description'],
       };
-      const c = cfgs[cmd];
-      const modal = new ModalBuilder().setCustomId(`form_modal:${cmd}`).setTitle(c.title);
-      c.fields.forEach(([id, label]) => modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId(id).setLabel(label).setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(500))));
+      const titles = { recrutement: 'Candidature — Recrutement', staff: 'Candidature — Staff', signalement: 'Signalement', gang: 'Création de gang' };
+      const questions = (s.formQuestions && s.formQuestions[cmd] && s.formQuestions[cmd].length > 0) ? s.formQuestions[cmd] : defaultQuestions[cmd];
+      const modal = new ModalBuilder().setCustomId(`form_modal:${cmd}`).setTitle(titles[cmd]);
+      questions.forEach((question, i) => modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId(`q${i}`).setLabel(question.slice(0, 45)).setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(500))));
       return interaction.showModal(modal);
+    }
+    if (cmd === 'config-questions') {
+      if (!interaction.memberPermissions.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({ content: "Permission refusée.", ephemeral: true });
+      const s = getSettings(interaction.guild.id);
+      const type = interaction.options.getString('formulaire');
+      const questions = [1, 2, 3, 4, 5].map(i => interaction.options.getString(`question${i}`)).filter(Boolean);
+      if (!s.formQuestions) s.formQuestions = {};
+      s.formQuestions[type] = questions;
+      saveSettings();
+      return interaction.reply({ content: `✅ ${questions.length} question(s) enregistrée(s) pour le formulaire **${type}**.`, ephemeral: true });
     }
     if (cmd === 'entreprise') {
       const modal = new ModalBuilder().setCustomId('form_modal:entreprise').setTitle("Création d'entreprise");
