@@ -6,7 +6,8 @@ const {
 } = require('discord.js');
 const fs = require('fs');
 require('dotenv').config();
-
+const http = require('http');
+http.createServer((req, res) => res.end('OK')).listen(10000);
 const CONFIG_PATH = './config.json';
 
 function getConfig() {
